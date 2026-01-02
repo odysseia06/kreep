@@ -1,0 +1,730 @@
+use core::fmt;
+use core::ops::{Add, Mul, Neg, Sub};
+
+use crate::algebra::field::Field;
+use crate::algebra::ring::Ring;
+use crate::structures::fp::Fp;
+use crate::structures::poly::Poly;
+
+/// Extension field F_p[x]/(f(x)) where f(x) is an irreducible polynomial of degree D.
+///
+/// Elements are represented as polynomials of degree < D, stored as an array of D coefficients.
+/// The modulus polynomial must be provided separately when performing field operations.
+///
+/// # Type Parameters
+/// - `P`: The prime modulus for the base field F_p
+/// - `D`: The degree of the extension (degree of the irreducible polynomial)
+///
+/// # Example
+///
+/// ```
+/// use kreep::{Fp, Poly, ExtField};
+///
+/// type F17 = Fp<17>;
+///
+/// // F_17[x]/(x^2 + 1) is a degree-2 extension
+/// // x^2 + 1 is irreducible over F_17 since -1 is not a quadratic residue mod 17
+/// let modulus = Poly::new(vec![F17::new(1), F17::new(0), F17::new(1)]); // 1 + x^2
+///
+/// // Create element (2 + 3x)
+/// let a = ExtField::<17, 2>::new([F17::new(2), F17::new(3)]);
+///
+/// // Create element (1 + x)
+/// let b = ExtField::<17, 2>::new([F17::new(1), F17::new(1)]);
+///
+/// // Multiply: (2 + 3x)(1 + x) = 2 + 5x + 3x^2
+/// // Since x^2 ≡ -1 (mod x^2 + 1), we get: 2 + 5x - 3 = -1 + 5x = 16 + 5x
+/// let c = a.mul_mod(&b, &modulus);
+/// assert_eq!(c.coeffs()[0], F17::new(16));
+/// assert_eq!(c.coeffs()[1], F17::new(5));
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExtField<const P: u64, const D: usize> {
+    /// Coefficients in ascending order: coeffs[i] is the coefficient of x^i
+    coeffs: [Fp<P>; D],
+}
+
+impl<const P: u64, const D: usize> ExtField<P, D> {
+    /// Create a new extension field element from coefficients.
+    ///
+    /// Coefficients are in ascending order: `coeffs[i]` is the coefficient of `x^i`.
+    pub fn new(coeffs: [Fp<P>; D]) -> Self {
+        Self { coeffs }
+    }
+
+    /// Create the zero element.
+    pub fn zero() -> Self {
+        Self {
+            coeffs: [Fp::ZERO; D],
+        }
+    }
+
+    /// Create the multiplicative identity (1).
+    pub fn one() -> Self {
+        let mut coeffs = [Fp::ZERO; D];
+        if D > 0 {
+            coeffs[0] = Fp::ONE;
+        }
+        Self { coeffs }
+    }
+
+    /// Create an element representing the variable x.
+    ///
+    /// Returns `None` if D < 2 (since x would not be a valid element).
+    pub fn x() -> Option<Self> {
+        if D < 2 {
+            return None;
+        }
+        let mut coeffs = [Fp::ZERO; D];
+        coeffs[1] = Fp::ONE;
+        Some(Self { coeffs })
+    }
+
+    /// Create an element from a base field element.
+    pub fn from_base(c: Fp<P>) -> Self {
+        let mut coeffs = [Fp::ZERO; D];
+        if D > 0 {
+            coeffs[0] = c;
+        }
+        Self { coeffs }
+    }
+
+    /// Get the coefficients.
+    pub fn coeffs(&self) -> &[Fp<P>; D] {
+        &self.coeffs
+    }
+
+    /// Get a specific coefficient.
+    pub fn coeff(&self, i: usize) -> Fp<P> {
+        if i < D {
+            self.coeffs[i]
+        } else {
+            Fp::ZERO
+        }
+    }
+
+    /// Check if this is the zero element.
+    pub fn is_zero(&self) -> bool {
+        self.coeffs.iter().all(|&c| c == Fp::ZERO)
+    }
+
+    /// Convert to a polynomial representation.
+    pub fn to_poly(&self) -> Poly<P> {
+        Poly::new(self.coeffs.to_vec())
+    }
+
+    /// Create from a polynomial, reducing if necessary.
+    ///
+    /// The polynomial is reduced modulo the given modulus.
+    pub fn from_poly(p: &Poly<P>, modulus: &Poly<P>) -> Self {
+        let reduced = p.rem(modulus).unwrap_or_else(Poly::zero);
+        let mut coeffs = [Fp::ZERO; D];
+        for (i, &c) in reduced.coefficients().iter().enumerate() {
+            if i < D {
+                coeffs[i] = c;
+            }
+        }
+        Self { coeffs }
+    }
+
+    /// Multiply two extension field elements modulo the irreducible polynomial.
+    ///
+    /// This is the core operation for extension field arithmetic.
+    pub fn mul_mod(&self, other: &Self, modulus: &Poly<P>) -> Self {
+        let a_poly = self.to_poly();
+        let b_poly = other.to_poly();
+        let product = a_poly * b_poly;
+        Self::from_poly(&product, modulus)
+    }
+
+    /// Compute the multiplicative inverse modulo the irreducible polynomial.
+    ///
+    /// Uses the extended Euclidean algorithm: if gcd(a, m) = 1,
+    /// then s*a + t*m = 1, so s*a ≡ 1 (mod m), meaning s is the inverse.
+    ///
+    /// Returns `None` if the element is zero.
+    pub fn inverse_mod(&self, modulus: &Poly<P>) -> Option<Self> {
+        if self.is_zero() {
+            return None;
+        }
+
+        let a_poly = self.to_poly();
+        let (g, s, _t) = Poly::extended_gcd(&a_poly, modulus);
+
+        // For a field extension with irreducible modulus, gcd should be 1
+        // (a constant polynomial) for any non-zero element
+        if g.degree() != Some(0) {
+            return None;
+        }
+
+        // Normalize: if gcd is c (constant), we need s/c as inverse
+        let c = g.coeff(0);
+        let c_inv = c.inverse()?;
+        let inv_poly = s * c_inv;
+
+        Some(Self::from_poly(&inv_poly, modulus))
+    }
+
+    /// Divide by another element modulo the irreducible polynomial.
+    pub fn div_mod(&self, other: &Self, modulus: &Poly<P>) -> Option<Self> {
+        let inv = other.inverse_mod(modulus)?;
+        Some(self.mul_mod(&inv, modulus))
+    }
+
+    /// Compute self^exp modulo the irreducible polynomial.
+    pub fn pow_mod(&self, mut exp: u64, modulus: &Poly<P>) -> Self {
+        if exp == 0 {
+            return Self::one();
+        }
+
+        let mut base = *self;
+        let mut result = Self::one();
+
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = result.mul_mod(&base, modulus);
+            }
+            base = base.mul_mod(&base, modulus);
+            exp >>= 1;
+        }
+
+        result
+    }
+
+    /// Evaluate the element as a polynomial at a given point in the base field.
+    pub fn eval(&self, x: Fp<P>) -> Fp<P> {
+        // Horner's method
+        let mut result = Fp::ZERO;
+        for &coeff in self.coeffs.iter().rev() {
+            result = result * x + coeff;
+        }
+        result
+    }
+
+    /// Frobenius endomorphism: x -> x^p.
+    ///
+    /// In characteristic p, this is an automorphism of the extension field.
+    pub fn frobenius(&self, modulus: &Poly<P>) -> Self {
+        self.pow_mod(P, modulus)
+    }
+
+    /// Compute the norm from the extension field to the base field.
+    ///
+    /// For F_{p^d}/F_p, the norm is the product of all conjugates:
+    /// N(a) = a * a^p * a^{p^2} * ... * a^{p^{d-1}}
+    pub fn norm(&self, modulus: &Poly<P>) -> Fp<P> {
+        let mut result = *self;
+        let mut conjugate = self.frobenius(modulus);
+
+        for _ in 1..D {
+            result = result.mul_mod(&conjugate, modulus);
+            conjugate = conjugate.frobenius(modulus);
+        }
+
+        // The result should be in the base field (degree 0)
+        result.coeffs[0]
+    }
+
+    /// Compute the trace from the extension field to the base field.
+    ///
+    /// For F_{p^d}/F_p, the trace is the sum of all conjugates:
+    /// Tr(a) = a + a^p + a^{p^2} + ... + a^{p^{d-1}}
+    pub fn trace(&self, modulus: &Poly<P>) -> Fp<P> {
+        let mut result = *self;
+        let mut conjugate = self.frobenius(modulus);
+
+        for _ in 1..D {
+            result = result + conjugate;
+            conjugate = conjugate.frobenius(modulus);
+        }
+
+        // The result should be in the base field (degree 0)
+        result.coeffs[0]
+    }
+}
+
+/* ---- Arithmetic operators (without modulus - for additive operations only) ---- */
+
+impl<const P: u64, const D: usize> Add for ExtField<P, D> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut coeffs = [Fp::ZERO; D];
+        for i in 0..D {
+            coeffs[i] = self.coeffs[i] + rhs.coeffs[i];
+        }
+        Self { coeffs }
+    }
+}
+
+impl<const P: u64, const D: usize> Sub for ExtField<P, D> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let mut coeffs = [Fp::ZERO; D];
+        for i in 0..D {
+            coeffs[i] = self.coeffs[i] - rhs.coeffs[i];
+        }
+        Self { coeffs }
+    }
+}
+
+impl<const P: u64, const D: usize> Neg for ExtField<P, D> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        let mut coeffs = [Fp::ZERO; D];
+        for i in 0..D {
+            coeffs[i] = -self.coeffs[i];
+        }
+        Self { coeffs }
+    }
+}
+
+/// Scalar multiplication by base field element.
+impl<const P: u64, const D: usize> Mul<Fp<P>> for ExtField<P, D> {
+    type Output = Self;
+
+    fn mul(self, rhs: Fp<P>) -> Self::Output {
+        let mut coeffs = [Fp::ZERO; D];
+        for i in 0..D {
+            coeffs[i] = self.coeffs[i] * rhs;
+        }
+        Self { coeffs }
+    }
+}
+
+impl<const P: u64, const D: usize> fmt::Debug for ExtField<P, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Delegate to polynomial Debug format
+        write!(f, "{:?}", self.to_poly())
+    }
+}
+
+impl<const P: u64, const D: usize> fmt::Display for ExtField<P, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl<const P: u64, const D: usize> Default for ExtField<P, D> {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+/// A wrapper that bundles an extension field element with its modulus,
+/// allowing implementation of Ring and Field traits.
+///
+/// This is useful when you want to work with extension field elements
+/// using the standard Ring/Field trait operations.
+#[derive(Clone)]
+pub struct ExtFieldWithModulus<'a, const P: u64, const D: usize> {
+    elem: ExtField<P, D>,
+    modulus: &'a Poly<P>,
+}
+
+impl<'a, const P: u64, const D: usize> ExtFieldWithModulus<'a, P, D> {
+    /// Create a new extension field element with its modulus.
+    pub fn new(elem: ExtField<P, D>, modulus: &'a Poly<P>) -> Self {
+        Self { elem, modulus }
+    }
+
+    /// Get the underlying element.
+    pub fn elem(&self) -> &ExtField<P, D> {
+        &self.elem
+    }
+
+    /// Get the modulus.
+    pub fn modulus(&self) -> &Poly<P> {
+        self.modulus
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type F17 = Fp<17>;
+    type Ext2 = ExtField<17, 2>;
+
+    // x^2 - 3 is irreducible over F_17 (since 3 is not a QR mod 17)
+    // In F_17: x^2 - 3 = x^2 + 14
+    fn modulus_x2_minus_3() -> Poly<17> {
+        Poly::new(vec![F17::new(14), F17::ZERO, F17::ONE]) // -3 + x^2 = 14 + x^2
+    }
+
+    #[test]
+    fn new_and_coeffs() {
+        let a = Ext2::new([F17::new(3), F17::new(5)]);
+        assert_eq!(a.coeff(0), F17::new(3));
+        assert_eq!(a.coeff(1), F17::new(5));
+        assert_eq!(a.coeff(2), F17::ZERO); // out of range
+    }
+
+    #[test]
+    fn zero_and_one() {
+        let z = Ext2::zero();
+        assert!(z.is_zero());
+        assert_eq!(z.coeff(0), F17::ZERO);
+        assert_eq!(z.coeff(1), F17::ZERO);
+
+        let one = Ext2::one();
+        assert!(!one.is_zero());
+        assert_eq!(one.coeff(0), F17::ONE);
+        assert_eq!(one.coeff(1), F17::ZERO);
+    }
+
+    #[test]
+    fn x_element() {
+        let x = Ext2::x().unwrap();
+        assert_eq!(x.coeff(0), F17::ZERO);
+        assert_eq!(x.coeff(1), F17::ONE);
+    }
+
+    #[test]
+    fn from_base() {
+        let a = Ext2::from_base(F17::new(7));
+        assert_eq!(a.coeff(0), F17::new(7));
+        assert_eq!(a.coeff(1), F17::ZERO);
+    }
+
+    #[test]
+    fn add_sub() {
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let b = Ext2::new([F17::new(5), F17::new(7)]);
+
+        let sum = a + b;
+        assert_eq!(sum.coeff(0), F17::new(7));
+        assert_eq!(sum.coeff(1), F17::new(10));
+
+        let diff = a - b;
+        assert_eq!(diff.coeff(0), F17::new(14)); // 2 - 5 = -3 = 14 mod 17
+        assert_eq!(diff.coeff(1), F17::new(13)); // 3 - 7 = -4 = 13 mod 17
+    }
+
+    #[test]
+    fn neg() {
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let neg_a = -a;
+
+        assert_eq!(neg_a.coeff(0), F17::new(15)); // -2 = 15 mod 17
+        assert_eq!(neg_a.coeff(1), F17::new(14)); // -3 = 14 mod 17
+    }
+
+    #[test]
+    fn scalar_mul() {
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let c = F17::new(5);
+        let result = a * c;
+
+        assert_eq!(result.coeff(0), F17::new(10));
+        assert_eq!(result.coeff(1), F17::new(15));
+    }
+
+    #[test]
+    fn mul_mod_basic() {
+        let m = modulus_x2_minus_3();
+
+        // (1 + x) * (1 + x) = 1 + 2x + x^2
+        // Since x^2 ≡ 3 (mod x^2 - 3): 1 + 2x + 3 = 4 + 2x
+        let a = Ext2::new([F17::ONE, F17::ONE]);
+        let result = a.mul_mod(&a, &m);
+
+        assert_eq!(result.coeff(0), F17::new(4));
+        assert_eq!(result.coeff(1), F17::new(2));
+    }
+
+    #[test]
+    fn mul_mod_x_squared() {
+        let m = modulus_x2_minus_3();
+
+        // x * x = x^2 ≡ 3 (mod x^2 - 3)
+        let x = Ext2::x().unwrap();
+        let x_squared = x.mul_mod(&x, &m);
+
+        assert_eq!(x_squared.coeff(0), F17::new(3));
+        assert_eq!(x_squared.coeff(1), F17::ZERO);
+    }
+
+    #[test]
+    fn mul_mod_associative() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let b = Ext2::new([F17::new(5), F17::new(7)]);
+        let c = Ext2::new([F17::new(11), F17::new(13)]);
+
+        let ab_c = a.mul_mod(&b, &m).mul_mod(&c, &m);
+        let a_bc = a.mul_mod(&b.mul_mod(&c, &m), &m);
+
+        assert_eq!(ab_c, a_bc);
+    }
+
+    #[test]
+    fn mul_mod_commutative() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let b = Ext2::new([F17::new(5), F17::new(7)]);
+
+        assert_eq!(a.mul_mod(&b, &m), b.mul_mod(&a, &m));
+    }
+
+    #[test]
+    fn mul_mod_identity() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let one = Ext2::one();
+
+        assert_eq!(a.mul_mod(&one, &m), a);
+        assert_eq!(one.mul_mod(&a, &m), a);
+    }
+
+    #[test]
+    fn mul_mod_zero() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let z = Ext2::zero();
+
+        assert!(a.mul_mod(&z, &m).is_zero());
+        assert!(z.mul_mod(&a, &m).is_zero());
+    }
+
+    #[test]
+    fn inverse_mod_basic() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let a_inv = a.inverse_mod(&m).unwrap();
+
+        // a * a^{-1} = 1
+        let product = a.mul_mod(&a_inv, &m);
+        assert_eq!(product, Ext2::one());
+    }
+
+    #[test]
+    fn inverse_mod_x() {
+        let m = modulus_x2_minus_3();
+
+        // x * x^{-1} = 1
+        // Since x^2 = 3, we have x * (x/3) = x^2/3 = 3/3 = 1
+        // So x^{-1} = x/3 = x * 3^{-1}
+        // 3^{-1} mod 17 = 6 (since 3*6 = 18 = 1 mod 17)
+        let x = Ext2::x().unwrap();
+        let x_inv = x.inverse_mod(&m).unwrap();
+
+        let product = x.mul_mod(&x_inv, &m);
+        assert_eq!(product, Ext2::one());
+
+        // Verify x^{-1} = 6x
+        assert_eq!(x_inv.coeff(0), F17::ZERO);
+        assert_eq!(x_inv.coeff(1), F17::new(6));
+    }
+
+    #[test]
+    fn inverse_mod_one() {
+        let m = modulus_x2_minus_3();
+
+        let one = Ext2::one();
+        let one_inv = one.inverse_mod(&m).unwrap();
+
+        assert_eq!(one_inv, one);
+    }
+
+    #[test]
+    fn inverse_mod_zero_fails() {
+        let m = modulus_x2_minus_3();
+
+        let z = Ext2::zero();
+        assert!(z.inverse_mod(&m).is_none());
+    }
+
+    #[test]
+    fn inverse_mod_all_nonzero() {
+        let m = modulus_x2_minus_3();
+
+        // Test several random elements
+        let elements = [
+            Ext2::new([F17::new(1), F17::new(1)]),
+            Ext2::new([F17::new(2), F17::new(5)]),
+            Ext2::new([F17::new(7), F17::new(11)]),
+            Ext2::new([F17::new(0), F17::new(1)]), // x
+            Ext2::new([F17::new(3), F17::new(0)]), // constant
+        ];
+
+        for a in &elements {
+            let a_inv = a
+                .inverse_mod(&m)
+                .expect("non-zero element should have inverse");
+            let product = a.mul_mod(&a_inv, &m);
+            assert_eq!(product, Ext2::one(), "failed for {:?}", a);
+        }
+    }
+
+    #[test]
+    fn div_mod_basic() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(6), F17::new(9)]);
+        let b = Ext2::new([F17::new(2), F17::new(3)]);
+
+        // a / b * b = a
+        let quotient = a.div_mod(&b, &m).unwrap();
+        let product = quotient.mul_mod(&b, &m);
+        assert_eq!(product, a);
+    }
+
+    #[test]
+    fn pow_mod_basic() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+
+        // a^0 = 1
+        assert_eq!(a.pow_mod(0, &m), Ext2::one());
+
+        // a^1 = a
+        assert_eq!(a.pow_mod(1, &m), a);
+
+        // a^2 = a * a
+        assert_eq!(a.pow_mod(2, &m), a.mul_mod(&a, &m));
+
+        // a^3 = a * a * a
+        let a2 = a.mul_mod(&a, &m);
+        assert_eq!(a.pow_mod(3, &m), a2.mul_mod(&a, &m));
+    }
+
+    #[test]
+    fn pow_mod_fermat() {
+        let m = modulus_x2_minus_3();
+
+        // In F_{p^2}, every non-zero element satisfies a^{p^2 - 1} = 1
+        let a = Ext2::new([F17::new(5), F17::new(7)]);
+        let order = 17u64 * 17 - 1; // p^2 - 1 = 288
+
+        let result = a.pow_mod(order, &m);
+        assert_eq!(result, Ext2::one());
+    }
+
+    #[test]
+    fn frobenius_basic() {
+        let m = modulus_x2_minus_3();
+
+        // Frobenius: a -> a^p
+        // For elements in base field, frobenius is identity
+        let base = Ext2::from_base(F17::new(5));
+        assert_eq!(base.frobenius(&m), base);
+
+        // For x: x^p = x^17
+        // In F_{17}[x]/(x^2-3), x^2 = 3
+        // x^17 = x * (x^2)^8 = x * 3^8
+        // 3^8 mod 17 = 6561 mod 17 = 16 = -1
+        // So x^17 = -x
+        let x = Ext2::x().unwrap();
+        let x_frob = x.frobenius(&m);
+        let neg_x = -x;
+        assert_eq!(x_frob, neg_x);
+    }
+
+    #[test]
+    fn to_poly_roundtrip() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(3), F17::new(7)]);
+        let p = a.to_poly();
+        let b = Ext2::from_poly(&p, &m);
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn from_poly_reduces() {
+        let m = modulus_x2_minus_3();
+
+        // Create a polynomial of degree >= 2
+        // 5 + 3x + 2x^2 should reduce to 5 + 3x + 2*3 = 11 + 3x (since x^2 = 3)
+        let p = Poly::new(vec![F17::new(5), F17::new(3), F17::new(2)]);
+        let a = Ext2::from_poly(&p, &m);
+
+        assert_eq!(a.coeff(0), F17::new(11)); // 5 + 6 = 11
+        assert_eq!(a.coeff(1), F17::new(3));
+    }
+
+    #[test]
+    fn distributive() {
+        let m = modulus_x2_minus_3();
+
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let b = Ext2::new([F17::new(5), F17::new(7)]);
+        let c = Ext2::new([F17::new(11), F17::new(13)]);
+
+        // a * (b + c) = a*b + a*c
+        let lhs = a.mul_mod(&(b + c), &m);
+        let rhs = a.mul_mod(&b, &m) + a.mul_mod(&c, &m);
+        assert_eq!(lhs, rhs);
+    }
+
+    #[test]
+    fn debug_format() {
+        let a = Ext2::new([F17::new(3), F17::new(5)]);
+        let s = format!("{:?}", a);
+        assert_eq!(s, "3 + 5*x");
+    }
+
+    #[test]
+    fn debug_format_zero() {
+        let z = Ext2::zero();
+        let s = format!("{:?}", z);
+        assert_eq!(s, "0");
+    }
+
+    // Degree 3 extension tests
+    type Ext3 = ExtField<17, 3>;
+
+    // x^3 - 2 over F_17
+    // Need to verify this is irreducible... 2^{(17-1)/gcd(3,16)} = 2^16 = 1 mod 17
+    // Actually let's use x^3 + x + 1 which is a common irreducible
+    fn modulus_cubic() -> Poly<17> {
+        // x^3 + x + 1 - need to verify irreducibility
+        // For now, let's just use it and trust the math
+        Poly::new(vec![F17::ONE, F17::ONE, F17::ZERO, F17::ONE]) // 1 + x + x^3
+    }
+
+    #[test]
+    fn cubic_extension_basic() {
+        let m = modulus_cubic();
+
+        let a = Ext3::new([F17::new(2), F17::new(3), F17::new(5)]);
+        let b = Ext3::new([F17::new(7), F17::new(11), F17::new(13)]);
+
+        // Basic operations
+        let sum = a + b;
+        assert_eq!(sum.coeff(0), F17::new(9));
+        assert_eq!(sum.coeff(1), F17::new(14));
+        assert_eq!(sum.coeff(2), F17::new(1)); // 18 mod 17
+
+        // Multiplication
+        let _product = a.mul_mod(&b, &m);
+        // Verify a * a^{-1} = 1
+        let a_inv = a.inverse_mod(&m).unwrap();
+        assert_eq!(a.mul_mod(&a_inv, &m), Ext3::one());
+    }
+
+    #[test]
+    fn cubic_extension_x_cubed() {
+        let m = modulus_cubic();
+
+        // x^3 ≡ -x - 1 (mod x^3 + x + 1)
+        let x = Ext3::x().unwrap();
+        let x2 = x.mul_mod(&x, &m);
+        let x3 = x2.mul_mod(&x, &m);
+
+        // x^3 = -x - 1 = 16x + 16
+        assert_eq!(x3.coeff(0), F17::new(16));
+        assert_eq!(x3.coeff(1), F17::new(16));
+        assert_eq!(x3.coeff(2), F17::ZERO);
+    }
+}

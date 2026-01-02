@@ -236,6 +236,174 @@ impl<const P: u64> Poly<P> {
         result
     }
 
+    /// Make the polynomial monic (leading coefficient = 1).
+    ///
+    /// Returns `None` if the polynomial is zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let p = Poly::new(vec![F17::new(2), F17::new(4), F17::new(2)]); // 2 + 4x + 2x^2
+    /// let monic = p.monic().unwrap();
+    /// assert_eq!(monic.leading_coeff(), Some(F17::new(1)));
+    /// ```
+    pub fn monic(&self) -> Option<Self> {
+        use crate::algebra::field::Field;
+
+        let lc = self.leading_coeff()?;
+        let inv = lc.inverse()?;
+        Some(self.clone() * inv)
+    }
+
+    /// Euclidean division: compute quotient and remainder.
+    ///
+    /// Returns `(q, r)` such that `self = q * divisor + r` and `deg(r) < deg(divisor)`.
+    ///
+    /// Returns `None` if the divisor is zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // (x^2 + 2x + 1) / (x + 1) = (x + 1), remainder 0
+    /// let dividend = Poly::new(vec![F17::new(1), F17::new(2), F17::new(1)]);
+    /// let divisor = Poly::new(vec![F17::new(1), F17::new(1)]);
+    /// let (q, r) = dividend.div_rem(&divisor).unwrap();
+    ///
+    /// assert_eq!(q, divisor);
+    /// assert!(r.is_zero());
+    /// ```
+    pub fn div_rem(&self, divisor: &Self) -> Option<(Self, Self)> {
+        use crate::algebra::field::Field;
+
+        if divisor.is_zero() {
+            return None;
+        }
+
+        // If dividend degree < divisor degree, quotient is 0
+        let divisor_deg = divisor.degree()?;
+        match self.degree() {
+            None => return Some((Self::zero(), Self::zero())),
+            Some(d) if d < divisor_deg => return Some((Self::zero(), self.clone())),
+            _ => {}
+        }
+
+        let lc_inv = divisor.leading_coeff()?.inverse()?;
+        let mut remainder = self.clone();
+        let mut quotient_coeffs = vec![Fp::ZERO; self.coeffs.len() - divisor.coeffs.len() + 1];
+
+        while let Some(rem_deg) = remainder.degree() {
+            if rem_deg < divisor_deg {
+                break;
+            }
+
+            let rem_lc = remainder.leading_coeff().unwrap();
+            let coeff = rem_lc * lc_inv;
+            let deg_diff = rem_deg - divisor_deg;
+
+            quotient_coeffs[deg_diff] = coeff;
+
+            // remainder -= coeff * x^deg_diff * divisor
+            for (i, &d_coeff) in divisor.coeffs.iter().enumerate() {
+                remainder.coeffs[i + deg_diff] = remainder.coeffs[i + deg_diff] - coeff * d_coeff;
+            }
+            remainder.normalize();
+        }
+
+        Some((Self::new(quotient_coeffs), remainder))
+    }
+
+    /// Compute the remainder of division.
+    ///
+    /// Returns `None` if the divisor is zero.
+    pub fn rem(&self, divisor: &Self) -> Option<Self> {
+        self.div_rem(divisor).map(|(_, r)| r)
+    }
+
+    /// Compute the greatest common divisor of two polynomials.
+    ///
+    /// The result is monic (leading coefficient = 1) unless both inputs are zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // gcd((x-1)(x-2), (x-2)(x-3)) = (x-2)
+    /// let p1 = Poly::from_roots(&[F17::new(1), F17::new(2)]);
+    /// let p2 = Poly::from_roots(&[F17::new(2), F17::new(3)]);
+    /// let g = Poly::gcd(&p1, &p2);
+    ///
+    /// // g should be monic and have root at 2
+    /// assert_eq!(g.leading_coeff(), Some(F17::new(1)));
+    /// assert_eq!(g.eval(F17::new(2)), F17::new(0));
+    /// ```
+    pub fn gcd(a: &Self, b: &Self) -> Self {
+        if b.is_zero() {
+            return a.monic().unwrap_or_else(Self::zero);
+        }
+
+        let r = a.rem(b).unwrap_or_else(Self::zero);
+        Self::gcd(b, &r)
+    }
+
+    /// Extended Euclidean algorithm for polynomials.
+    ///
+    /// Returns `(g, s, t)` such that `g = gcd(a, b) = s*a + t*b`.
+    ///
+    /// The gcd `g` is monic unless both inputs are zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let a = Poly::new(vec![F17::new(1), F17::new(2), F17::new(1)]); // 1 + 2x + x^2
+    /// let b = Poly::new(vec![F17::new(1), F17::new(1)]); // 1 + x
+    ///
+    /// let (g, s, t) = Poly::extended_gcd(&a, &b);
+    ///
+    /// // Verify: s*a + t*b = g
+    /// let check = s * a.clone() + t * b.clone();
+    /// assert_eq!(check, g);
+    /// ```
+    pub fn extended_gcd(a: &Self, b: &Self) -> (Self, Self, Self) {
+        if b.is_zero() {
+            if a.is_zero() {
+                return (Self::zero(), Self::zero(), Self::zero());
+            }
+            // Make result monic
+            let monic_a = a.monic().unwrap();
+            let lc_inv = {
+                use crate::algebra::field::Field;
+                a.leading_coeff().unwrap().inverse().unwrap()
+            };
+            return (monic_a, Self::constant(lc_inv), Self::zero());
+        }
+
+        let (q, r) = a.div_rem(b).unwrap();
+        let (g, s1, t1) = Self::extended_gcd(b, &r);
+
+        // g = s1 * b + t1 * r
+        //   = s1 * b + t1 * (a - q * b)
+        //   = t1 * a + (s1 - t1 * q) * b
+        let s = t1.clone();
+        let t = s1 - t1 * q;
+
+        (g, s, t)
+    }
+
     /// Lagrange interpolation: find the unique polynomial of degree < n
     /// passing through the given points.
     ///
@@ -890,5 +1058,360 @@ mod tests {
             let x = F17::new(i);
             assert_eq!(p.eval(x), q.eval(x), "mismatch at x={}", i);
         }
+    }
+
+    // ---- monic tests ----
+
+    #[test]
+    fn monic_basic() {
+        // 2 + 4x + 2x^2 -> 1 + 2x + x^2
+        let p = P17::new(vec![F17::new(2), F17::new(4), F17::new(2)]);
+        let m = p.monic().unwrap();
+        assert_eq!(m.leading_coeff(), Some(F17::ONE));
+        assert_eq!(m.coeff(0), F17::ONE);
+        assert_eq!(m.coeff(1), F17::new(2));
+    }
+
+    #[test]
+    fn monic_already_monic() {
+        let p = P17::new(vec![F17::new(3), F17::new(5), F17::ONE]);
+        let m = p.monic().unwrap();
+        assert_eq!(m, p);
+    }
+
+    #[test]
+    fn monic_zero() {
+        let z = P17::zero();
+        assert!(z.monic().is_none());
+    }
+
+    // ---- div_rem tests ----
+
+    #[test]
+    fn div_rem_exact_division() {
+        // (x^2 - 1) / (x - 1) = (x + 1), remainder 0
+        // x^2 - 1 = [16, 0, 1] (since -1 ≡ 16 mod 17)
+        // x - 1 = [16, 1]
+        let dividend = P17::new(vec![F17::new(16), F17::ZERO, F17::ONE]);
+        let divisor = P17::new(vec![F17::new(16), F17::ONE]);
+        let (q, r) = dividend.div_rem(&divisor).unwrap();
+
+        // q should be x + 1
+        assert_eq!(q.coeff(0), F17::ONE);
+        assert_eq!(q.coeff(1), F17::ONE);
+        assert!(r.is_zero());
+
+        // Verify: dividend = q * divisor + r
+        assert_eq!(q * divisor, dividend);
+    }
+
+    #[test]
+    fn div_rem_with_remainder() {
+        // (x^2 + 1) / (x + 1) = x - 1 + 2/(x+1)
+        // So quotient = x - 1, remainder = 2
+        let dividend = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        let divisor = P17::new(vec![F17::ONE, F17::ONE]); // 1 + x
+        let (q, r) = dividend.clone().div_rem(&divisor).unwrap();
+
+        // Verify: dividend = q * divisor + r
+        let reconstructed = q.clone() * divisor.clone() + r.clone();
+        assert_eq!(reconstructed, dividend);
+
+        // Check remainder degree < divisor degree
+        assert!(r.degree().unwrap_or(0) < divisor.degree().unwrap());
+    }
+
+    #[test]
+    fn div_rem_dividend_smaller() {
+        // (x + 1) / (x^2 + 1) = 0, remainder (x + 1)
+        let dividend = P17::new(vec![F17::ONE, F17::ONE]); // 1 + x
+        let divisor = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        let (q, r) = dividend.clone().div_rem(&divisor).unwrap();
+
+        assert!(q.is_zero());
+        assert_eq!(r, dividend);
+    }
+
+    #[test]
+    fn div_rem_zero_dividend() {
+        let dividend = P17::zero();
+        let divisor = P17::new(vec![F17::ONE, F17::ONE]);
+        let (q, r) = dividend.div_rem(&divisor).unwrap();
+
+        assert!(q.is_zero());
+        assert!(r.is_zero());
+    }
+
+    #[test]
+    fn div_rem_zero_divisor() {
+        let dividend = P17::new(vec![F17::ONE, F17::ONE]);
+        let divisor = P17::zero();
+        assert!(dividend.div_rem(&divisor).is_none());
+    }
+
+    #[test]
+    fn div_rem_by_constant() {
+        // (2x + 4) / 2 = (x + 2)
+        let dividend = P17::new(vec![F17::new(4), F17::new(2)]);
+        let divisor = P17::constant(F17::new(2));
+        let (q, r) = dividend.div_rem(&divisor).unwrap();
+
+        assert_eq!(q.coeff(0), F17::new(2));
+        assert_eq!(q.coeff(1), F17::ONE);
+        assert!(r.is_zero());
+    }
+
+    #[test]
+    fn div_rem_non_monic_divisor() {
+        // (6x^2 + 11x + 3) / (3x + 1) = (2x + 3), remainder 0
+        let dividend = P17::new(vec![F17::new(3), F17::new(11), F17::new(6)]);
+        let divisor = P17::new(vec![F17::ONE, F17::new(3)]);
+        let (q, r) = dividend.clone().div_rem(&divisor).unwrap();
+
+        // Verify: dividend = q * divisor + r
+        let reconstructed = q * divisor + r.clone();
+        assert_eq!(reconstructed, dividend);
+        assert!(r.is_zero());
+    }
+
+    #[test]
+    fn div_rem_cubic() {
+        // Test with higher degree
+        // (x^3 + 2x^2 + 3x + 4) / (x + 1)
+        let dividend = P17::new(vec![F17::new(4), F17::new(3), F17::new(2), F17::ONE]);
+        let divisor = P17::new(vec![F17::ONE, F17::ONE]);
+        let (q, r) = dividend.clone().div_rem(&divisor).unwrap();
+
+        // Verify: dividend = q * divisor + r
+        let reconstructed = q * divisor.clone() + r.clone();
+        assert_eq!(reconstructed, dividend);
+
+        // Remainder degree < divisor degree
+        match r.degree() {
+            None => {} // zero is fine
+            Some(d) => assert!(d < divisor.degree().unwrap()),
+        }
+    }
+
+    // ---- rem tests ----
+
+    #[test]
+    fn rem_basic() {
+        let a = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        let b = P17::new(vec![F17::ONE, F17::ONE]); // 1 + x
+        let r = a.rem(&b).unwrap();
+
+        // Should equal the remainder from div_rem
+        let (_, r2) = a.div_rem(&b).unwrap();
+        assert_eq!(r, r2);
+    }
+
+    // ---- gcd tests ----
+
+    #[test]
+    fn gcd_coprime() {
+        // gcd(x, x + 1) = 1
+        let a = P17::x();
+        let b = P17::new(vec![F17::ONE, F17::ONE]);
+        let g = P17::gcd(&a, &b);
+
+        assert_eq!(g.degree(), Some(0));
+        assert_eq!(g.coeff(0), F17::ONE);
+    }
+
+    #[test]
+    fn gcd_common_factor() {
+        // gcd((x-1)(x-2), (x-2)(x-3)) = (x-2)
+        let p1 = P17::from_roots(&[F17::new(1), F17::new(2)]);
+        let p2 = P17::from_roots(&[F17::new(2), F17::new(3)]);
+        let g = P17::gcd(&p1, &p2);
+
+        // Should be monic
+        assert_eq!(g.leading_coeff(), Some(F17::ONE));
+        // Should have degree 1
+        assert_eq!(g.degree(), Some(1));
+        // Should have root at 2
+        assert_eq!(g.eval(F17::new(2)), F17::ZERO);
+    }
+
+    #[test]
+    fn gcd_one_divides_other() {
+        // gcd(x-1, (x-1)(x-2)) = x-1
+        let a = P17::from_roots(&[F17::new(1)]);
+        let b = P17::from_roots(&[F17::new(1), F17::new(2)]);
+        let g = P17::gcd(&a, &b);
+
+        assert_eq!(g.degree(), Some(1));
+        assert_eq!(g.eval(F17::new(1)), F17::ZERO);
+    }
+
+    #[test]
+    fn gcd_same_polynomial() {
+        let p = P17::from_roots(&[F17::new(3), F17::new(5)]);
+        let g = P17::gcd(&p, &p);
+
+        // gcd(p, p) = p (made monic)
+        let monic_p = p.monic().unwrap();
+        assert_eq!(g, monic_p);
+    }
+
+    #[test]
+    fn gcd_with_zero() {
+        let p = P17::new(vec![F17::new(2), F17::new(4)]); // 2 + 4x
+        let z = P17::zero();
+
+        let g1 = P17::gcd(&p, &z);
+        let g2 = P17::gcd(&z, &p);
+
+        // gcd(p, 0) = monic(p) and gcd(0, p) = monic(p)
+        let monic_p = p.monic().unwrap();
+        assert_eq!(g1, monic_p);
+        assert_eq!(g2, monic_p);
+    }
+
+    #[test]
+    fn gcd_both_zero() {
+        let z = P17::zero();
+        let g = P17::gcd(&z, &z);
+        assert!(g.is_zero());
+    }
+
+    #[test]
+    fn gcd_multiple_common_roots() {
+        // gcd((x-1)(x-2)(x-3), (x-2)(x-3)(x-4)) = (x-2)(x-3)
+        let p1 = P17::from_roots(&[F17::new(1), F17::new(2), F17::new(3)]);
+        let p2 = P17::from_roots(&[F17::new(2), F17::new(3), F17::new(4)]);
+        let g = P17::gcd(&p1, &p2);
+
+        assert_eq!(g.degree(), Some(2));
+        assert_eq!(g.eval(F17::new(2)), F17::ZERO);
+        assert_eq!(g.eval(F17::new(3)), F17::ZERO);
+        // 1 and 4 are not roots of gcd
+        assert_ne!(g.eval(F17::new(1)), F17::ZERO);
+        assert_ne!(g.eval(F17::new(4)), F17::ZERO);
+    }
+
+    #[test]
+    fn gcd_is_monic() {
+        // Even with non-monic inputs, gcd should be monic
+        let p1 = P17::new(vec![F17::new(6), F17::new(4), F17::new(2)]); // 6 + 4x + 2x^2
+        let p2 = P17::new(vec![F17::new(3), F17::new(3)]); // 3 + 3x
+        let g = P17::gcd(&p1, &p2);
+
+        if !g.is_zero() {
+            assert_eq!(g.leading_coeff(), Some(F17::ONE));
+        }
+    }
+
+    // ---- extended_gcd tests ----
+
+    #[test]
+    fn extended_gcd_bezout_identity() {
+        let a = P17::new(vec![F17::new(1), F17::new(2), F17::new(1)]); // 1 + 2x + x^2
+        let b = P17::new(vec![F17::new(1), F17::new(1)]); // 1 + x
+
+        let (g, s, t) = P17::extended_gcd(&a, &b);
+
+        // Verify Bézout identity: s*a + t*b = g
+        let check = s * a.clone() + t * b.clone();
+        assert_eq!(check, g);
+    }
+
+    #[test]
+    fn extended_gcd_coprime() {
+        // Extended gcd of coprime polynomials
+        let a = P17::x();
+        let b = P17::new(vec![F17::ONE, F17::ONE]); // 1 + x
+
+        let (g, s, t) = P17::extended_gcd(&a, &b);
+
+        // g should be 1
+        assert_eq!(g.degree(), Some(0));
+        assert_eq!(g.coeff(0), F17::ONE);
+
+        // Verify Bézout identity
+        let check = s * a + t * b;
+        assert_eq!(check, g);
+    }
+
+    #[test]
+    fn extended_gcd_with_common_factor() {
+        // a = (x-1)(x-2), b = (x-2)(x-3)
+        let a = P17::from_roots(&[F17::new(1), F17::new(2)]);
+        let b = P17::from_roots(&[F17::new(2), F17::new(3)]);
+
+        let (g, s, t) = P17::extended_gcd(&a, &b);
+
+        // g should be x-2 (monic)
+        assert_eq!(g.degree(), Some(1));
+        assert_eq!(g.eval(F17::new(2)), F17::ZERO);
+
+        // Verify Bézout identity
+        let check = s * a + t * b;
+        assert_eq!(check, g);
+    }
+
+    #[test]
+    fn extended_gcd_second_zero() {
+        let a = P17::new(vec![F17::new(2), F17::new(4)]); // 2 + 4x
+        let b = P17::zero();
+
+        let (g, s, t) = P17::extended_gcd(&a, &b);
+
+        // g should be monic(a)
+        let monic_a = a.monic().unwrap();
+        assert_eq!(g, monic_a);
+
+        // Verify: s*a + t*b = g
+        let check = s * a + t * b;
+        assert_eq!(check, g);
+    }
+
+    #[test]
+    fn extended_gcd_first_zero() {
+        let a = P17::zero();
+        let b = P17::new(vec![F17::new(3), F17::new(6)]); // 3 + 6x
+
+        let (g, s, t) = P17::extended_gcd(&a, &b);
+
+        // g should be monic(b)
+        let monic_b = b.monic().unwrap();
+        assert_eq!(g, monic_b);
+
+        // Verify: s*a + t*b = g
+        let check = s * a + t * b;
+        assert_eq!(check, g);
+    }
+
+    #[test]
+    fn extended_gcd_both_zero() {
+        let a = P17::zero();
+        let b = P17::zero();
+
+        let (g, s, t) = P17::extended_gcd(&a, &b);
+
+        assert!(g.is_zero());
+        assert!(s.is_zero());
+        assert!(t.is_zero());
+    }
+
+    #[test]
+    fn extended_gcd_inverse_modulo() {
+        // If gcd(a, m) = 1, then s is the inverse of a modulo m
+        // This is the key operation for field extensions!
+        let a = P17::new(vec![F17::new(2), F17::ONE]); // 2 + x
+        let m = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+
+        let (g, s, _t) = P17::extended_gcd(&a, &m);
+
+        // Should be coprime
+        assert_eq!(g.degree(), Some(0));
+        assert_eq!(g.coeff(0), F17::ONE);
+
+        // s * a ≡ 1 (mod m)
+        let product = s * a;
+        let remainder = product.rem(&m).unwrap();
+        assert_eq!(remainder.degree(), Some(0));
+        assert_eq!(remainder.coeff(0), F17::ONE);
     }
 }
