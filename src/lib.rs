@@ -7,4 +7,5 @@ pub use algebra::group::Group;
 pub use algebra::ring::Ring;
 
 pub use structures::fp::Fp;
+pub use structures::poly::Poly;
 pub use utils::is_prime;
