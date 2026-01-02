@@ -149,6 +149,68 @@ impl<const P: u64> Fp<P> {
         Ok(())
     }
 
+    /// Compute `self^exp` using square-and-multiply.
+    ///
+    /// Time complexity: O(log exp) multiplications.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let a = F17::new(3);
+    /// assert_eq!(a.pow(0), F17::ONE);
+    /// assert_eq!(a.pow(1), a);
+    /// assert_eq!(a.pow(2), a * a);
+    /// assert_eq!(a.pow(16), F17::ONE);  // Fermat: a^(p-1) = 1
+    /// ```
+    #[inline]
+    pub fn pow(self, exp: u64) -> Self {
+        if exp == 0 {
+            return Self::ONE;
+        }
+
+        let mut base = self;
+        let mut result = Self::ONE;
+        let mut e = exp;
+
+        while e > 0 {
+            if e & 1 == 1 {
+                result = result * base;
+            }
+            base = base * base;
+            e >>= 1;
+        }
+        result
+    }
+
+    /// Compute `self^exp` where `exp` can be negative.
+    ///
+    /// For negative exponents, computes `(self^(-1))^|exp|`.
+    /// Returns `None` if `self` is zero and `exp` is negative.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Ring, Field};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let a = F17::new(3);
+    /// assert_eq!(a.pow_signed(-1), a.inverse());
+    /// assert_eq!(a.pow_signed(-2).unwrap(), a.inverse().unwrap() * a.inverse().unwrap());
+    /// ```
+    pub fn pow_signed(self, exp: i64) -> Option<Self> {
+        if exp >= 0 {
+            Some(self.pow(exp as u64))
+        } else {
+            let inv = self.inverse()?;
+            Some(inv.pow((-exp) as u64))
+        }
+    }
+
     /// Batch inversion using Montgomery's trick.
     ///
     /// Computes the multiplicative inverse of each element in the slice
@@ -549,5 +611,83 @@ mod tests {
         let individual_inv: Vec<F17> = elements.iter().map(|x| x.inverse().unwrap()).collect();
 
         assert_eq!(batch_inv, individual_inv);
+    }
+
+    #[test]
+    fn pow_basic() {
+        let a = F17::new(3);
+
+        assert_eq!(a.pow(0), F17::ONE);
+        assert_eq!(a.pow(1), a);
+        assert_eq!(a.pow(2), a * a);
+        assert_eq!(a.pow(3), a * a * a);
+    }
+
+    #[test]
+    fn pow_zero_base() {
+        assert_eq!(F17::ZERO.pow(0), F17::ONE); // 0^0 = 1 by convention
+        assert_eq!(F17::ZERO.pow(1), F17::ZERO);
+        assert_eq!(F17::ZERO.pow(100), F17::ZERO);
+    }
+
+    #[test]
+    fn pow_one_base() {
+        assert_eq!(F17::ONE.pow(0), F17::ONE);
+        assert_eq!(F17::ONE.pow(1), F17::ONE);
+        assert_eq!(F17::ONE.pow(1000), F17::ONE);
+    }
+
+    #[test]
+    fn pow_fermat_little_theorem() {
+        // a^(p-1) = 1 for all nonzero a in Fp
+        for x in 1u64..17 {
+            let a = F17::new(x);
+            assert_eq!(a.pow(16), F17::ONE);
+        }
+    }
+
+    #[test]
+    fn pow_large_exponent() {
+        let a = F17::new(5);
+        // 5^100 mod 17
+        // Using Fermat: 5^16 = 1, so 5^100 = 5^(16*6 + 4) = 5^4
+        let expected = a.pow(4);
+        assert_eq!(a.pow(100), expected);
+    }
+
+    #[test]
+    fn pow_signed_positive() {
+        let a = F17::new(3);
+        assert_eq!(a.pow_signed(0), Some(F17::ONE));
+        assert_eq!(a.pow_signed(1), Some(a));
+        assert_eq!(a.pow_signed(2), Some(a * a));
+    }
+
+    #[test]
+    fn pow_signed_negative() {
+        let a = F17::new(3);
+        let a_inv = a.inverse().unwrap();
+
+        assert_eq!(a.pow_signed(-1), Some(a_inv));
+        assert_eq!(a.pow_signed(-2), Some(a_inv * a_inv));
+        assert_eq!(a.pow_signed(-3), Some(a_inv * a_inv * a_inv));
+    }
+
+    #[test]
+    fn pow_signed_zero_base() {
+        assert_eq!(F17::ZERO.pow_signed(0), Some(F17::ONE));
+        assert_eq!(F17::ZERO.pow_signed(5), Some(F17::ZERO));
+        assert_eq!(F17::ZERO.pow_signed(-1), None); // 0^(-1) undefined
+    }
+
+    #[test]
+    fn pow_inverse_relationship() {
+        // a^(-n) * a^n = 1
+        let a = F17::new(7);
+        for n in 1i64..10 {
+            let pos = a.pow_signed(n).unwrap();
+            let neg = a.pow_signed(-n).unwrap();
+            assert_eq!(pos * neg, F17::ONE);
+        }
     }
 }
