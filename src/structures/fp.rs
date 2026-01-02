@@ -94,6 +94,13 @@ pub struct Fp<const P: u64> {
     mont: u64,
 }
 
+#[cfg(feature = "rand")]
+impl<const P: u64> rand::distributions::Distribution<Fp<P>> for rand::distributions::Standard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Fp<P> {
+        Fp::new(rng.gen_range(0..P))
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<const P: u64> serde::Serialize for Fp<P> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -1062,5 +1069,48 @@ mod serde_tests {
         assert_eq!(elements[0].value(), 1);
         assert_eq!(elements[1].value(), 5);
         assert_eq!(elements[2].value(), 16);
+    }
+}
+
+#[cfg(all(test, feature = "rand"))]
+mod rand_tests {
+    use super::*;
+    use rand::Rng;
+
+    type F17 = Fp<17>;
+
+    #[test]
+    fn random_in_range() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let a: F17 = rng.gen();
+            assert!(a.value() < 17);
+        }
+    }
+
+    #[test]
+    fn random_distribution() {
+        // Generate many random elements and check we get variety
+        let mut rng = rand::thread_rng();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let a: F17 = rng.gen();
+            seen.insert(a.value());
+        }
+        // With 1000 samples from 17 elements, we should see most of them
+        assert!(seen.len() >= 15, "should see most field elements");
+    }
+
+    #[test]
+    fn random_nonzero() {
+        // Helper to generate non-zero elements
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let mut a: F17 = rng.gen();
+            while a == F17::ZERO {
+                a = rng.gen();
+            }
+            assert_ne!(a, F17::ZERO);
+        }
     }
 }
