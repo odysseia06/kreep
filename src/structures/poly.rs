@@ -1,6 +1,7 @@
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
+use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
 use crate::structures::fp::Fp;
 
@@ -682,7 +683,7 @@ impl<const P: u64> Poly<P> {
             // Generate random monic polynomial of given degree
             let mut coeffs = Vec::with_capacity(degree + 1);
             for _ in 0..degree {
-                coeffs.push(Fp::new(rng.random::<u64>() % P));
+                coeffs.push(Fp::new(rng.gen_range(0..P)));
             }
             coeffs.push(Fp::ONE); // monic
 
@@ -709,7 +710,7 @@ impl<const P: u64> Poly<P> {
             // Generate random monic polynomial of given degree
             let mut coeffs = Vec::with_capacity(degree + 1);
             for _ in 0..degree {
-                coeffs.push(Fp::new(rng.random::<u64>() % P));
+                coeffs.push(Fp::new(rng.gen_range(0..P)));
             }
             coeffs.push(Fp::ONE); // monic
 
@@ -788,6 +789,412 @@ impl<const P: u64> Poly<P> {
         }
 
         Some(result)
+    }
+
+    /* ---- Polynomial Factorization ---- */
+
+    /// Compute the formal derivative of this polynomial.
+    ///
+    /// The derivative of a_n x^n + ... + a_1 x + a_0 is
+    /// n*a_n x^{n-1} + ... + a_1.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // f(x) = x^3 + 2x^2 + 3x + 4
+    /// let f = Poly::new(vec![F17::new(4), F17::new(3), F17::new(2), F17::new(1)]);
+    ///
+    /// // f'(x) = 3x^2 + 4x + 3
+    /// let df = f.derivative();
+    /// assert_eq!(df, Poly::new(vec![F17::new(3), F17::new(4), F17::new(3)]));
+    /// ```
+    pub fn derivative(&self) -> Self {
+        if self.coeffs.len() <= 1 {
+            return Self::zero();
+        }
+
+        let mut coeffs = Vec::with_capacity(self.coeffs.len() - 1);
+        for (i, &c) in self.coeffs.iter().enumerate().skip(1) {
+            coeffs.push(c * Fp::new(i as u64));
+        }
+
+        Self::new(coeffs)
+    }
+
+    /// Square-free factorization.
+    ///
+    /// Returns a list of (factor, multiplicity) pairs where each factor is
+    /// square-free (has no repeated roots) and the product of factor^multiplicity
+    /// equals self (up to a constant factor).
+    ///
+    /// Uses Yun's algorithm for characteristic > degree, otherwise falls back
+    /// to the general algorithm handling p-th powers.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // f(x) = (x - 1)^2 * (x - 2) = x^3 - 4x^2 + 5x - 2
+    /// let x_minus_1 = Poly::new(vec![F17::new(16), F17::new(1)]); // x - 1
+    /// let x_minus_2 = Poly::new(vec![F17::new(15), F17::new(1)]); // x - 2
+    /// let f = (x_minus_1.clone() * x_minus_1) * x_minus_2;
+    ///
+    /// let factors = f.square_free_factorization();
+    ///
+    /// // Should have (x-1, 2) and (x-2, 1)
+    /// assert_eq!(factors.len(), 2);
+    /// ```
+    pub fn square_free_factorization(&self) -> Vec<(Self, usize)> {
+        if self.is_zero() {
+            return vec![];
+        }
+
+        let f = match self.monic() {
+            Some(m) => m,
+            None => return vec![],
+        };
+
+        if f.degree() == Some(0) {
+            return vec![];
+        }
+
+        let mut result = Vec::new();
+        let df = f.derivative();
+
+        if df.is_zero() {
+            // f'(x) = 0 means f(x) = g(x^p) for some g
+            // This happens when all exponents are multiples of p
+            let g = self.pth_root();
+            let sub_factors = g.square_free_factorization();
+            for (factor, mult) in sub_factors {
+                result.push((factor, mult * P as usize));
+            }
+            return result;
+        }
+
+        // Yun's algorithm
+        let mut c = Self::gcd(&f, &df);
+        let mut w = f.div_rem(&c).map(|(q, _)| q).unwrap_or_else(Self::zero);
+        let mut i = 1usize;
+
+        while w.degree().unwrap_or(0) > 0 {
+            let y = Self::gcd(&w, &c);
+            let z = w.div_rem(&y).map(|(q, _)| q).unwrap_or_else(Self::zero);
+
+            if z.degree().unwrap_or(0) > 0 {
+                result.push((z.monic().unwrap_or(z), i));
+            }
+
+            w = y;
+            c = c.div_rem(&w).map(|(q, _)| q).unwrap_or_else(Self::zero);
+            i += 1;
+        }
+
+        // Handle remaining factor from p-th powers
+        if c.degree().unwrap_or(0) > 0 {
+            let g = c.pth_root();
+            let sub_factors = g.square_free_factorization();
+            for (factor, mult) in sub_factors {
+                result.push((factor, mult * P as usize));
+            }
+        }
+
+        result
+    }
+
+    /// Compute the p-th root of a polynomial where all exponents are multiples of p.
+    ///
+    /// Given f(x) = sum a_i x^{ip}, returns g(x) = sum a_i^{1/p} x^i.
+    fn pth_root(&self) -> Self {
+        let mut coeffs = Vec::new();
+
+        for (i, &c) in self.coeffs.iter().enumerate() {
+            if i % (P as usize) == 0 {
+                // a^{1/p} = a^{p-1} in F_p (since a^p = a, so a^{p-1} * a^{1} = a)
+                // Actually a^{1/p} = a^{p^{k-1}} where p^k = |F|
+                // For F_p, a^{1/p} = a (since a^p = a by Fermat)
+                coeffs.push(c);
+            }
+        }
+
+        Self::new(coeffs)
+    }
+
+    /// Distinct-degree factorization.
+    ///
+    /// Returns a list of (g_i, i) where g_i is the product of all monic
+    /// irreducible factors of degree i.
+    ///
+    /// The input should be monic and square-free for correct results.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F5 = Fp<5>;
+    ///
+    /// // f(x) = (x - 1)(x - 2)(x^2 + x + 1) where x^2 + x + 1 is irreducible over F_5
+    /// // This has two linear factors and one quadratic factor
+    /// let f = Poly::new(vec![F5::new(3), F5::new(1), F5::new(4), F5::new(0), F5::new(1)]);
+    ///
+    /// let ddf = f.distinct_degree_factorization();
+    /// // ddf contains products of factors grouped by degree
+    /// ```
+    pub fn distinct_degree_factorization(&self) -> Vec<(Self, usize)> {
+        if self.is_zero() || self.degree() == Some(0) {
+            return vec![];
+        }
+
+        let f = match self.monic() {
+            Some(m) => m,
+            None => return vec![],
+        };
+
+        let n = f.degree().unwrap();
+        let mut result = Vec::new();
+        let mut f_star = f.clone();
+        let mut h = Self::x(); // h = x^{p^i}
+
+        for i in 1..=n / 2 {
+            // h = x^{p^i} mod f_star
+            h = match f_star.powmod(&h, P) {
+                Some(r) => r,
+                None => break,
+            };
+
+            // g_i = gcd(h - x, f_star)
+            let h_minus_x = h.clone() - Self::x();
+            let g = Self::gcd(&h_minus_x, &f_star);
+
+            if g.degree().unwrap_or(0) > 0 {
+                let g_monic = g.monic().unwrap_or(g.clone());
+                result.push((g_monic.clone(), i));
+
+                // f_star = f_star / g
+                f_star = f_star.div_rem(&g).map(|(q, _)| q).unwrap_or(f_star);
+                h = h.rem(&f_star).unwrap_or(h);
+            }
+        }
+
+        // Any remaining factor has degree > n/2, so must be irreducible
+        if f_star.degree().unwrap_or(0) > 0 {
+            let d = f_star.degree().unwrap();
+            result.push((f_star.monic().unwrap_or(f_star), d));
+        }
+
+        result
+    }
+
+    /// Equal-degree factorization using Cantor-Zassenhaus algorithm.
+    ///
+    /// Given a polynomial f that is a product of distinct irreducible
+    /// polynomials all of degree d, returns the list of irreducible factors.
+    ///
+    /// Requires a random number generator for the probabilistic algorithm.
+    #[cfg(feature = "rand")]
+    pub fn equal_degree_factorization<R: rand::Rng>(&self, d: usize, rng: &mut R) -> Vec<Self> {
+        let f = match self.monic() {
+            Some(m) => m,
+            None => return vec![],
+        };
+
+        let n = match f.degree() {
+            Some(deg) => deg,
+            None => return vec![],
+        };
+
+        if n == 0 {
+            return vec![];
+        }
+
+        if n == d {
+            // f is already irreducible
+            return vec![f];
+        }
+
+        // Number of factors
+        let r = n / d;
+        if r == 1 {
+            return vec![f];
+        }
+
+        // Cantor-Zassenhaus: find a non-trivial factor
+        loop {
+            // Pick random polynomial a of degree < n
+            let a = Self::random_poly(rng, n - 1);
+
+            if a.is_zero() {
+                continue;
+            }
+
+            // Compute gcd(a, f)
+            let g1 = Self::gcd(&a, &f);
+            if g1.degree().unwrap_or(0) > 0 && g1.degree().unwrap() < n {
+                // Found a non-trivial factor
+                let g1_monic = g1.monic().unwrap_or(g1);
+                let other = f.div_rem(&g1_monic).map(|(q, _)| q).unwrap();
+                let other_monic = other.monic().unwrap_or(other);
+
+                let mut factors = Self::equal_degree_factorization(&g1_monic, d, rng);
+                factors.extend(Self::equal_degree_factorization(&other_monic, d, rng));
+                return factors;
+            }
+
+            // Compute a^{(p^d - 1)/2} mod f
+            // For odd p, this gives a splitting
+            let exp = Self::compute_half_order(d);
+            let b = match f.powmod(&a, exp) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            // gcd(b - 1, f)
+            let b_minus_1 = b - Self::constant(Fp::ONE);
+            let g2 = Self::gcd(&b_minus_1, &f);
+
+            if g2.degree().unwrap_or(0) > 0 && g2.degree().unwrap() < n {
+                let g2_monic = g2.monic().unwrap_or(g2);
+                let other = f.div_rem(&g2_monic).map(|(q, _)| q).unwrap();
+                let other_monic = other.monic().unwrap_or(other);
+
+                let mut factors = Self::equal_degree_factorization(&g2_monic, d, rng);
+                factors.extend(Self::equal_degree_factorization(&other_monic, d, rng));
+                return factors;
+            }
+        }
+    }
+
+    /// Compute (p^d - 1) / 2.
+    fn compute_half_order(d: usize) -> u64 {
+        let mut result: u64 = 1;
+        for _ in 0..d {
+            result = result.saturating_mul(P);
+        }
+        (result - 1) / 2
+    }
+
+    /// Generate a random polynomial of degree at most max_degree.
+    #[cfg(feature = "rand")]
+    fn random_poly<R: rand::Rng>(rng: &mut R, max_degree: usize) -> Self {
+        let mut coeffs = Vec::with_capacity(max_degree + 1);
+        for _ in 0..=max_degree {
+            coeffs.push(Fp::new(rng.gen_range(0..P)));
+        }
+        Self::new(coeffs)
+    }
+
+    /// Full factorization into irreducible factors.
+    ///
+    /// Returns a list of (irreducible_factor, multiplicity) pairs.
+    /// The product of factor^multiplicity equals self up to a constant.
+    ///
+    /// Requires a random number generator for the Cantor-Zassenhaus step.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // f(x) = (x - 1)^2 * (x - 2)
+    /// let x_minus_1 = Poly::new(vec![F17::new(16), F17::new(1)]);
+    /// let x_minus_2 = Poly::new(vec![F17::new(15), F17::new(1)]);
+    /// let f = (x_minus_1.clone() * x_minus_1) * x_minus_2;
+    ///
+    /// let mut rng = rand::thread_rng();
+    /// let factors = f.factor(&mut rng);
+    ///
+    /// // Should have two distinct irreducible factors
+    /// assert_eq!(factors.len(), 2);
+    /// ```
+    #[cfg(feature = "rand")]
+    pub fn factor<R: rand::Rng>(&self, rng: &mut R) -> Vec<(Self, usize)> {
+        if self.is_zero() {
+            return vec![];
+        }
+
+        let mut result = Vec::new();
+
+        // Step 1: Square-free factorization
+        let sqf = self.square_free_factorization();
+
+        for (sq_free_factor, multiplicity) in sqf {
+            // Step 2: Distinct-degree factorization
+            let ddf = sq_free_factor.distinct_degree_factorization();
+
+            for (same_degree_product, degree) in ddf {
+                // Step 3: Equal-degree factorization
+                let irreducibles = same_degree_product.equal_degree_factorization(degree, rng);
+
+                for irr in irreducibles {
+                    result.push((irr, multiplicity));
+                }
+            }
+        }
+
+        // Sort by degree, then by coefficients for consistent output
+        result.sort_by(|a, b| {
+            let deg_cmp = a.0.degree().cmp(&b.0.degree());
+            if deg_cmp != std::cmp::Ordering::Equal {
+                return deg_cmp;
+            }
+            // Compare coefficients lexicographically
+            for i in 0..=a.0.degree().unwrap_or(0) {
+                let cmp = a.0.coeff(i).value().cmp(&b.0.coeff(i).value());
+                if cmp != std::cmp::Ordering::Equal {
+                    return cmp;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+
+        result
+    }
+
+    /// Find all roots of this polynomial in F_p.
+    ///
+    /// Returns a list of (root, multiplicity) pairs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // f(x) = (x - 3)(x - 5) = x^2 - 8x + 15
+    /// let f = Poly::new(vec![F17::new(15), F17::new(9), F17::new(1)]); // 15 - 8x + x^2 (note: -8 = 9 mod 17)
+    ///
+    /// let mut rng = rand::thread_rng();
+    /// let roots = f.roots(&mut rng);
+    ///
+    /// assert_eq!(roots.len(), 2);
+    /// ```
+    #[cfg(feature = "rand")]
+    pub fn roots<R: rand::Rng>(&self, rng: &mut R) -> Vec<(Fp<P>, usize)> {
+        let factors = self.factor(rng);
+
+        factors
+            .into_iter()
+            .filter_map(|(f, mult)| {
+                if f.degree() == Some(1) {
+                    // f = x - r, so r = -f.coeff(0) / f.coeff(1)
+                    let r = -f.coeff(0) * f.coeff(1).inverse()?;
+                    Some((r, mult))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -2108,5 +2515,249 @@ mod tests {
         // Number of primitive polynomials = φ(p^n - 1) / n
         // φ(24) / 2 = 8 / 2 = 4
         assert_eq!(primitive_count, 4);
+    }
+
+    // ---- Derivative tests ----
+
+    #[test]
+    fn derivative_constant() {
+        let f = P17::constant(F17::new(5));
+        assert!(f.derivative().is_zero());
+    }
+
+    #[test]
+    fn derivative_linear() {
+        // (3 + 2x)' = 2
+        let f = P17::new(vec![F17::new(3), F17::new(2)]);
+        let df = f.derivative();
+        assert_eq!(df, P17::constant(F17::new(2)));
+    }
+
+    #[test]
+    fn derivative_quadratic() {
+        // (1 + 2x + 3x^2)' = 2 + 6x
+        let f = P17::new(vec![F17::new(1), F17::new(2), F17::new(3)]);
+        let df = f.derivative();
+        assert_eq!(df, P17::new(vec![F17::new(2), F17::new(6)]));
+    }
+
+    #[test]
+    fn derivative_cubic() {
+        // (4 + 3x + 2x^2 + x^3)' = 3 + 4x + 3x^2
+        let f = P17::new(vec![F17::new(4), F17::new(3), F17::new(2), F17::new(1)]);
+        let df = f.derivative();
+        assert_eq!(df, P17::new(vec![F17::new(3), F17::new(4), F17::new(3)]));
+    }
+
+    // ---- Square-free factorization tests ----
+
+    #[test]
+    fn square_free_linear() {
+        // x - 1 is already square-free
+        let f = P17::new(vec![F17::new(16), F17::ONE]); // x - 1
+        let sqf = f.square_free_factorization();
+        assert_eq!(sqf.len(), 1);
+        assert_eq!(sqf[0].1, 1); // multiplicity 1
+    }
+
+    #[test]
+    fn square_free_squared_linear() {
+        // (x - 1)^2
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let f = x_minus_1.clone() * x_minus_1.clone();
+        let sqf = f.square_free_factorization();
+
+        assert_eq!(sqf.len(), 1);
+        assert_eq!(sqf[0].0, x_minus_1.monic().unwrap());
+        assert_eq!(sqf[0].1, 2); // multiplicity 2
+    }
+
+    #[test]
+    fn square_free_product() {
+        // (x - 1)^2 * (x - 2)
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let x_minus_2 = P17::new(vec![F17::new(15), F17::ONE]);
+        let f = (x_minus_1.clone() * x_minus_1.clone()) * x_minus_2.clone();
+
+        let sqf = f.square_free_factorization();
+        assert_eq!(sqf.len(), 2);
+
+        // Check multiplicities (order may vary)
+        let mut found_1 = false;
+        let mut found_2 = false;
+        for (factor, mult) in &sqf {
+            if *mult == 1 && *factor == x_minus_2 {
+                found_1 = true;
+            }
+            if *mult == 2 && *factor == x_minus_1 {
+                found_2 = true;
+            }
+        }
+        assert!(found_1 && found_2);
+    }
+
+    // ---- Distinct-degree factorization tests ----
+
+    #[test]
+    fn ddf_single_linear() {
+        // x - 1 has one linear factor
+        let f = P17::new(vec![F17::new(16), F17::ONE]);
+        let ddf = f.distinct_degree_factorization();
+        assert_eq!(ddf.len(), 1);
+        assert_eq!(ddf[0].1, 1); // degree 1
+    }
+
+    #[test]
+    fn ddf_two_linears() {
+        // (x - 1)(x - 2) = x^2 - 3x + 2
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let x_minus_2 = P17::new(vec![F17::new(15), F17::ONE]);
+        let f = x_minus_1 * x_minus_2;
+
+        let ddf = f.distinct_degree_factorization();
+        assert_eq!(ddf.len(), 1);
+        assert_eq!(ddf[0].1, 1); // all factors have degree 1
+        assert_eq!(ddf[0].0.degree(), Some(2)); // product of two degree-1 factors
+    }
+
+    #[test]
+    fn ddf_irreducible_quadratic() {
+        // x^2 - 3 is irreducible over F_17
+        let f = P17::new(vec![F17::new(14), F17::ZERO, F17::ONE]);
+        let ddf = f.distinct_degree_factorization();
+        assert_eq!(ddf.len(), 1);
+        assert_eq!(ddf[0].1, 2); // degree 2
+    }
+
+    // ---- Full factorization tests (require rand) ----
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn factor_linear() {
+        let mut rng = rand::thread_rng();
+        let f = P17::new(vec![F17::new(16), F17::ONE]); // x - 1
+        let factors = f.factor(&mut rng);
+
+        assert_eq!(factors.len(), 1);
+        assert_eq!(factors[0].0, f);
+        assert_eq!(factors[0].1, 1);
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn factor_squared_linear() {
+        let mut rng = rand::thread_rng();
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let f = x_minus_1.clone() * x_minus_1.clone();
+        let factors = f.factor(&mut rng);
+
+        assert_eq!(factors.len(), 1);
+        assert_eq!(factors[0].0, x_minus_1);
+        assert_eq!(factors[0].1, 2);
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn factor_two_linears() {
+        let mut rng = rand::thread_rng();
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let x_minus_2 = P17::new(vec![F17::new(15), F17::ONE]);
+        let f = x_minus_1 * x_minus_2;
+
+        let factors = f.factor(&mut rng);
+        assert_eq!(factors.len(), 2);
+
+        // Both should have multiplicity 1
+        assert!(factors.iter().all(|(_, m)| *m == 1));
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn factor_mixed() {
+        let mut rng = rand::thread_rng();
+        // (x - 1)^2 * (x - 2)
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let x_minus_2 = P17::new(vec![F17::new(15), F17::ONE]);
+        let f = (x_minus_1.clone() * x_minus_1.clone()) * x_minus_2.clone();
+
+        let factors = f.factor(&mut rng);
+        assert_eq!(factors.len(), 2);
+
+        // Check we have both factors with correct multiplicities
+        let mut found_mult_1 = false;
+        let mut found_mult_2 = false;
+        for (factor, mult) in &factors {
+            if *factor == x_minus_1 && *mult == 2 {
+                found_mult_2 = true;
+            }
+            if *factor == x_minus_2 && *mult == 1 {
+                found_mult_1 = true;
+            }
+        }
+        assert!(found_mult_1 && found_mult_2);
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn factor_product_reconstruction() {
+        let mut rng = rand::thread_rng();
+        // Create a polynomial and verify factorization reconstructs it
+        let x_minus_1 = P17::new(vec![F17::new(16), F17::ONE]);
+        let x_minus_3 = P17::new(vec![F17::new(14), F17::ONE]);
+        let x_minus_5 = P17::new(vec![F17::new(12), F17::ONE]);
+        let f = (x_minus_1 * x_minus_3) * x_minus_5;
+
+        let factors = f.factor(&mut rng);
+
+        // Reconstruct the polynomial
+        let mut reconstructed = P17::constant(F17::ONE);
+        for (factor, mult) in &factors {
+            for _ in 0..*mult {
+                reconstructed = reconstructed * factor.clone();
+            }
+        }
+
+        // Should equal original (up to leading coefficient)
+        assert_eq!(reconstructed.monic(), f.monic());
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn roots_basic() {
+        let mut rng = rand::thread_rng();
+        // (x - 3)(x - 5)
+        let f = P17::new(vec![F17::new(15), F17::new(9), F17::ONE]); // 15 - 8x + x^2 = 15 + 9x + x^2 mod 17
+
+        let roots = f.roots(&mut rng);
+        assert_eq!(roots.len(), 2);
+
+        let root_values: Vec<_> = roots.iter().map(|(r, _)| r.value()).collect();
+        assert!(root_values.contains(&3));
+        assert!(root_values.contains(&5));
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn roots_with_multiplicity() {
+        let mut rng = rand::thread_rng();
+        // (x - 2)^2
+        let x_minus_2 = P17::new(vec![F17::new(15), F17::ONE]);
+        let f = x_minus_2.clone() * x_minus_2;
+
+        let roots = f.roots(&mut rng);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].0, F17::new(2));
+        assert_eq!(roots[0].1, 2);
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn roots_irreducible_no_roots() {
+        let mut rng = rand::thread_rng();
+        // x^2 - 3 is irreducible over F_17, so no roots in F_17
+        let f = P17::new(vec![F17::new(14), F17::ZERO, F17::ONE]);
+
+        let roots = f.roots(&mut rng);
+        assert!(roots.is_empty());
     }
 }
