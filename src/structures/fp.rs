@@ -94,6 +94,27 @@ pub struct Fp<const P: u64> {
     mont: u64,
 }
 
+#[cfg(feature = "serde")]
+impl<const P: u64> serde::Serialize for Fp<P> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.value().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const P: u64> serde::Deserialize<'de> for Fp<P> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u64::deserialize(deserializer)?;
+        Ok(Self::new(value))
+    }
+}
+
 impl<const P: u64> Fp<P> {
     /// Create a new field element from a standard integer.
     ///
@@ -988,5 +1009,58 @@ mod tests {
             let r = a_sq.sqrt().expect("perfect square should have sqrt");
             assert_eq!(r * r, a_sq);
         }
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    type F17 = Fp<17>;
+
+    #[test]
+    fn serialize_json() {
+        let a = F17::new(5);
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(json, "5");
+    }
+
+    #[test]
+    fn deserialize_json() {
+        let a: F17 = serde_json::from_str("5").unwrap();
+        assert_eq!(a.value(), 5);
+    }
+
+    #[test]
+    fn roundtrip() {
+        for x in 0u64..17 {
+            let a = F17::new(x);
+            let json = serde_json::to_string(&a).unwrap();
+            let b: F17 = serde_json::from_str(&json).unwrap();
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn deserialize_reduces_mod_p() {
+        // Values >= P should be reduced
+        let a: F17 = serde_json::from_str("20").unwrap();
+        assert_eq!(a.value(), 3); // 20 mod 17 = 3
+    }
+
+    #[test]
+    fn serialize_vec() {
+        let elements: Vec<F17> = vec![F17::new(1), F17::new(5), F17::new(16)];
+        let json = serde_json::to_string(&elements).unwrap();
+        assert_eq!(json, "[1,5,16]");
+    }
+
+    #[test]
+    fn deserialize_vec() {
+        let elements: Vec<F17> = serde_json::from_str("[1,5,16]").unwrap();
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements[0].value(), 1);
+        assert_eq!(elements[1].value(), 5);
+        assert_eq!(elements[2].value(), 16);
     }
 }
