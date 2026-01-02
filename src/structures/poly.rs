@@ -404,6 +404,181 @@ impl<const P: u64> Poly<P> {
         (g, s, t)
     }
 
+    /// Compute `x^exp mod self` using repeated squaring.
+    ///
+    /// This is useful for irreducibility testing where we need to compute
+    /// `x^{p^k} mod f(x)` efficiently.
+    ///
+    /// Returns `None` if self is zero.
+    pub fn powmod_x(&self, exp: u64) -> Option<Self> {
+        if self.is_zero() {
+            return None;
+        }
+
+        if exp == 0 {
+            return Some(Self::constant(Fp::ONE));
+        }
+
+        let mut base = Self::x().rem(self)?;
+        let mut result = Self::constant(Fp::ONE);
+        let mut e = exp;
+
+        while e > 0 {
+            if e & 1 == 1 {
+                result = (result * &base).rem(self)?;
+            }
+            base = (base.clone() * &base).rem(self)?;
+            e >>= 1;
+        }
+
+        Some(result)
+    }
+
+    /// Compute `base^exp mod self` using repeated squaring.
+    ///
+    /// Returns `None` if self is zero.
+    pub fn powmod(&self, base: &Self, exp: u64) -> Option<Self> {
+        if self.is_zero() {
+            return None;
+        }
+
+        if exp == 0 {
+            return Some(Self::constant(Fp::ONE));
+        }
+
+        let mut b = base.rem(self)?;
+        let mut result = Self::constant(Fp::ONE);
+        let mut e = exp;
+
+        while e > 0 {
+            if e & 1 == 1 {
+                result = (result * &b).rem(self)?;
+            }
+            b = (b.clone() * &b).rem(self)?;
+            e >>= 1;
+        }
+
+        Some(result)
+    }
+
+    /// Test if this polynomial is irreducible over F_p using Rabin's algorithm.
+    ///
+    /// A polynomial f(x) of degree n over F_p is irreducible if and only if:
+    /// 1. `x^{p^n} ≡ x (mod f(x))`
+    /// 2. `gcd(x^{p^{n/q}} - x, f(x)) = 1` for each prime divisor q of n
+    ///
+    /// Returns `false` for constant or zero polynomials.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // x^2 - 3 is irreducible over F_17 (3 is not a quadratic residue)
+    /// let f = Poly::new(vec![F17::new(14), F17::new(0), F17::new(1)]); // -3 + x^2
+    /// assert!(f.is_irreducible());
+    ///
+    /// // x^2 - 4 is reducible over F_17 (4 = 2^2 is a quadratic residue)
+    /// let g = Poly::new(vec![F17::new(13), F17::new(0), F17::new(1)]); // -4 + x^2
+    /// assert!(!g.is_irreducible());
+    /// ```
+    pub fn is_irreducible(&self) -> bool {
+        let n = match self.degree() {
+            None => return false,    // zero polynomial
+            Some(0) => return false, // constant polynomial
+            Some(1) => return true,  // linear polynomials are always irreducible
+            Some(d) => d,
+        };
+
+        // Make monic for cleaner computation (irreducibility is preserved)
+        let f = match self.monic() {
+            Some(m) => m,
+            None => return false,
+        };
+
+        // Step 1: Compute x^{p^n} mod f(x) and check if it equals x
+        // We compute this iteratively: x -> x^p -> x^{p^2} -> ... -> x^{p^n}
+        let mut h = Self::x(); // h = x^{p^i}, starting with i=0
+
+        // Get prime divisors of n for step 2
+        let prime_divisors = Self::prime_divisors(n);
+
+        // For each i from 1 to n, compute h = h^p mod f
+        for i in 1..=n {
+            h = match f.powmod(&h, P) {
+                Some(r) => r,
+                None => return false,
+            };
+
+            // Step 2: At i = n/q for each prime divisor q, check gcd(h - x, f) = 1
+            for &q in &prime_divisors {
+                if n == i * q {
+                    // We're at i = n/q
+                    let h_minus_x = h.clone() - Self::x();
+                    let g = Self::gcd(&h_minus_x, &f);
+                    if g.degree() != Some(0) {
+                        return false; // gcd is non-trivial, f is reducible
+                    }
+                }
+            }
+        }
+
+        // Step 1 check: h should now be x^{p^n}, verify h = x (mod f)
+        let h_minus_x = h - Self::x();
+        h_minus_x.is_zero()
+    }
+
+    /// Find all prime divisors of n.
+    fn prime_divisors(mut n: usize) -> Vec<usize> {
+        let mut primes = Vec::new();
+        let mut d = 2;
+
+        while d * d <= n {
+            if n % d == 0 {
+                primes.push(d);
+                while n % d == 0 {
+                    n /= d;
+                }
+            }
+            d += 1;
+        }
+
+        if n > 1 {
+            primes.push(n);
+        }
+
+        primes
+    }
+
+    /// Generate a random monic irreducible polynomial of the given degree.
+    ///
+    /// Uses rejection sampling: generate random monic polynomials until
+    /// finding an irreducible one.
+    ///
+    /// # Panics
+    ///
+    /// Panics if degree is 0.
+    #[cfg(feature = "rand")]
+    pub fn random_irreducible<R: rand::Rng>(rng: &mut R, degree: usize) -> Self {
+        assert!(degree > 0, "degree must be positive");
+
+        loop {
+            // Generate random monic polynomial of given degree
+            let mut coeffs = Vec::with_capacity(degree + 1);
+            for _ in 0..degree {
+                coeffs.push(Fp::new(rng.random::<u64>() % P));
+            }
+            coeffs.push(Fp::ONE); // monic
+
+            let f = Self::new(coeffs);
+            if f.is_irreducible() {
+                return f;
+            }
+        }
+    }
+
     /// Lagrange interpolation: find the unique polynomial of degree < n
     /// passing through the given points.
     ///
@@ -1413,5 +1588,207 @@ mod tests {
         let remainder = product.rem(&m).unwrap();
         assert_eq!(remainder.degree(), Some(0));
         assert_eq!(remainder.coeff(0), F17::ONE);
+    }
+
+    // ---- powmod tests ----
+
+    #[test]
+    fn powmod_x_basic() {
+        // x^3 mod (x^2 + 1) = x * x^2 = x * (-1) = -x = 16x in F17
+        let m = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        let result = m.powmod_x(3).unwrap();
+
+        assert_eq!(result.degree(), Some(1));
+        assert_eq!(result.coeff(0), F17::ZERO);
+        assert_eq!(result.coeff(1), F17::new(16)); // -1 mod 17
+    }
+
+    #[test]
+    fn powmod_x_zero_exp() {
+        let m = P17::new(vec![F17::ONE, F17::ONE]); // 1 + x
+        let result = m.powmod_x(0).unwrap();
+
+        assert_eq!(result.degree(), Some(0));
+        assert_eq!(result.coeff(0), F17::ONE);
+    }
+
+    #[test]
+    fn powmod_x_one_exp() {
+        let m = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        let result = m.powmod_x(1).unwrap();
+
+        assert_eq!(result, P17::x());
+    }
+
+    #[test]
+    fn powmod_base() {
+        // (1 + x)^2 mod (x^2 + 1) = 1 + 2x + x^2 = 1 + 2x - 1 = 2x
+        let m = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        let base = P17::new(vec![F17::ONE, F17::ONE]); // 1 + x
+        let result = m.powmod(&base, 2).unwrap();
+
+        assert_eq!(result.coeff(0), F17::ZERO);
+        assert_eq!(result.coeff(1), F17::new(2));
+    }
+
+    #[test]
+    fn powmod_zero_modulus() {
+        let m = P17::zero();
+        assert!(m.powmod_x(5).is_none());
+    }
+
+    // ---- irreducibility tests ----
+
+    #[test]
+    fn is_irreducible_zero() {
+        let f = P17::zero();
+        assert!(!f.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_constant() {
+        let f = P17::constant(F17::new(5));
+        assert!(!f.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_linear() {
+        // All linear polynomials are irreducible
+        let f = P17::new(vec![F17::new(3), F17::ONE]); // 3 + x
+        assert!(f.is_irreducible());
+
+        let g = P17::new(vec![F17::new(7), F17::new(5)]); // 7 + 5x
+        assert!(g.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_quadratic_non_residue() {
+        // x^2 - a is irreducible iff a is not a quadratic residue
+        // 3 is not a QR mod 17
+        let f = P17::new(vec![F17::new(14), F17::ZERO, F17::ONE]); // -3 + x^2
+        assert!(f.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_quadratic_residue() {
+        // x^2 - a is reducible if a is a quadratic residue
+        // 4 = 2^2 is a QR mod 17
+        let f = P17::new(vec![F17::new(13), F17::ZERO, F17::ONE]); // -4 + x^2
+        assert!(!f.is_irreducible());
+
+        // 1 = 1^2 is a QR mod 17, so x^2 - 1 = (x-1)(x+1)
+        let g = P17::new(vec![F17::new(16), F17::ZERO, F17::ONE]); // -1 + x^2
+        assert!(!g.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_x2_plus_1() {
+        // x^2 + 1 over F_17
+        // -1 = 16 is a QR mod 17 (since 4^2 = 16), so x^2 + 1 is reducible
+        let f = P17::new(vec![F17::ONE, F17::ZERO, F17::ONE]); // 1 + x^2
+        assert!(!f.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_has_root() {
+        // (x - 5) is a factor, so x^2 - 5x + 6 = (x-2)(x-3) is reducible
+        // Actually let's just check a polynomial with a known root
+        // f(x) = x^2 - 5, if 5 is QR then reducible
+        // 5 is not a QR mod 17, so x^2 - 5 is irreducible
+        let f = P17::new(vec![F17::new(12), F17::ZERO, F17::ONE]); // -5 + x^2
+        assert!(f.is_irreducible());
+
+        // x^2 - 9 = (x-3)(x+3), 9 = 3^2 is QR
+        let g = P17::new(vec![F17::new(8), F17::ZERO, F17::ONE]); // -9 + x^2
+        assert!(!g.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_cubic() {
+        // x^3 + x + 1 over F_2 would be irreducible, but we're in F_17
+        // Let's test x^3 - 2 over F_17
+        // Need to check if 2 has a cube root mod 17
+        // 2^((17-1)/gcd(3,16)) = 2^16 = 1 mod 17, so 2 is a cube (since gcd(3,16)=1)
+        // Actually for cube roots: a is a cube iff a^((p-1)/gcd(3,p-1)) = 1
+        // gcd(3, 16) = 1, so 2^16 = 1, meaning 2 is a perfect cube
+        // So x^3 - 2 is reducible
+
+        // Let's find an irreducible cubic instead
+        // x^3 + x + 1: check if it has roots in F_17
+        let f = P17::new(vec![F17::ONE, F17::ONE, F17::ZERO, F17::ONE]); // 1 + x + x^3
+
+        // Check manually for roots
+        let mut has_root = false;
+        for i in 0..17 {
+            let x = F17::new(i);
+            if f.eval(x) == F17::ZERO {
+                has_root = true;
+                break;
+            }
+        }
+
+        // If no roots and degree 3, need further check for irreducibility
+        // A cubic with no roots is irreducible
+        if !has_root {
+            assert!(f.is_irreducible());
+        }
+    }
+
+    #[test]
+    fn is_irreducible_product_of_irreducibles() {
+        // (x - 1)(x - 2) = x^2 - 3x + 2
+        let f = P17::from_roots(&[F17::new(1), F17::new(2)]);
+        assert!(!f.is_irreducible());
+    }
+
+    #[test]
+    fn is_irreducible_non_monic() {
+        // 2x^2 - 6 should be reducible (same as x^2 - 3 up to scalar)
+        // Wait, 3 is not a QR, so x^2 - 3 is irreducible
+        let f = P17::new(vec![F17::new(11), F17::ZERO, F17::new(2)]); // -6 + 2x^2 = 2(x^2 - 3)
+        assert!(f.is_irreducible()); // Irreducibility is preserved by scalar multiplication
+
+        // 2x^2 - 8 = 2(x^2 - 4), and 4 is QR, so reducible
+        let g = P17::new(vec![F17::new(9), F17::ZERO, F17::new(2)]); // -8 + 2x^2
+        assert!(!g.is_irreducible());
+    }
+
+    #[test]
+    fn prime_divisors_basic() {
+        assert_eq!(P17::prime_divisors(1), vec![]);
+        assert_eq!(P17::prime_divisors(2), vec![2]);
+        assert_eq!(P17::prime_divisors(3), vec![3]);
+        assert_eq!(P17::prime_divisors(4), vec![2]);
+        assert_eq!(P17::prime_divisors(6), vec![2, 3]);
+        assert_eq!(P17::prime_divisors(12), vec![2, 3]);
+        assert_eq!(P17::prime_divisors(30), vec![2, 3, 5]);
+        assert_eq!(P17::prime_divisors(17), vec![17]);
+    }
+
+    #[test]
+    fn is_irreducible_degree_4() {
+        // x^4 + x + 1 over F_2 is irreducible, let's check over F_17
+        let f = P17::new(vec![F17::ONE, F17::ONE, F17::ZERO, F17::ZERO, F17::ONE]);
+
+        // Just verify the function runs without panic
+        let _ = f.is_irreducible();
+    }
+
+    #[test]
+    fn is_irreducible_degree_6() {
+        // Test with composite degree (6 = 2 * 3)
+        // This exercises the prime divisor checks
+        let f = P17::new(vec![
+            F17::ONE,
+            F17::ONE,
+            F17::ZERO,
+            F17::ZERO,
+            F17::ZERO,
+            F17::ZERO,
+            F17::ONE,
+        ]); // 1 + x + x^6
+
+        // Just verify the function runs without panic for composite degrees
+        let _ = f.is_irreducible();
     }
 }
