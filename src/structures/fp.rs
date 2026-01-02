@@ -489,6 +489,38 @@ impl<const P: u64> fmt::Display for Fp<P> {
     }
 }
 
+/* ---- From/Into conversions ---- */
+
+impl<const P: u64> From<u64> for Fp<P> {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<const P: u64> From<u32> for Fp<P> {
+    fn from(value: u32) -> Self {
+        Self::new(value as u64)
+    }
+}
+
+impl<const P: u64> From<u16> for Fp<P> {
+    fn from(value: u16) -> Self {
+        Self::new(value as u64)
+    }
+}
+
+impl<const P: u64> From<u8> for Fp<P> {
+    fn from(value: u8) -> Self {
+        Self::new(value as u64)
+    }
+}
+
+impl<const P: u64> From<Fp<P>> for u64 {
+    fn from(fp: Fp<P>) -> Self {
+        fp.value()
+    }
+}
+
 /* ---- standard arithmetic operators ---- */
 
 impl<const P: u64> Add for Fp<P> {
