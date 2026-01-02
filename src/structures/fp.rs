@@ -3,12 +3,9 @@ use core::ops::{Add, Div, Mul, Neg, Sub};
 
 use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
+use crate::utils::is_prime;
 
 /// Prime field GF(p) where `p` is a `u64`-sized modulus.
-///
-/// NOTE:
-/// - We *assume* `P` is prime if you treat this as a field.
-/// - Arithmetic is done modulo `P`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Fp<const P: u64> {
     value: u64,
@@ -16,7 +13,10 @@ pub struct Fp<const P: u64> {
 
 impl<const P: u64> Fp<P> {
     /// Create a new field element, automatically reduced modulo `P`.
-    pub const fn new(value: u64) -> Self {
+    ///
+    /// In debug builds, this asserts that `P` is prime.
+    pub fn new(value: u64) -> Self {
+        debug_assert!(is_prime(P), "Fp modulus P={} is not prime", P);
         Self { value: value % P }
     }
 
@@ -28,6 +28,29 @@ impl<const P: u64> Fp<P> {
     /// The modulus `p`.
     pub const fn modulus() -> u64 {
         P
+    }
+
+    /// Validate that the modulus `P` is prime.
+    ///
+    /// Returns `Ok(())` if `P` is prime, or an error message otherwise.
+    /// Call this at application startup for early failure on misconfiguration.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::Fp;
+    ///
+    /// type F17 = Fp<17>;
+    /// assert!(F17::validate_prime().is_ok());
+    ///
+    /// type F15 = Fp<15>;
+    /// assert!(F15::validate_prime().is_err());
+    /// ```
+    pub const fn validate_prime() -> Result<(), &'static str> {
+        if !is_prime(P) {
+            return Err("modulus P is not prime");
+        }
+        Ok(())
     }
 }
 
@@ -200,5 +223,21 @@ mod tests {
     fn inverse_none_for_zero() {
         let zero = F17::ZERO;
         assert!(zero.inverse().is_none());
+    }
+
+    #[test]
+    fn validate_prime_ok() {
+        assert!(Fp::<2>::validate_prime().is_ok());
+        assert!(Fp::<3>::validate_prime().is_ok());
+        assert!(Fp::<17>::validate_prime().is_ok());
+        assert!(Fp::<101>::validate_prime().is_ok());
+    }
+
+    #[test]
+    fn validate_prime_err() {
+        assert!(Fp::<1>::validate_prime().is_err());
+        assert!(Fp::<4>::validate_prime().is_err());
+        assert!(Fp::<15>::validate_prime().is_err());
+        assert!(Fp::<100>::validate_prime().is_err());
     }
 }

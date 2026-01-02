@@ -1,8 +1,10 @@
 pub mod algebra;
 pub mod structures;
+pub mod utils;
 
 pub use algebra::field::Field;
 pub use algebra::group::Group;
 pub use algebra::ring::Ring;
 
 pub use structures::fp::Fp;
+pub use utils::is_prime;
