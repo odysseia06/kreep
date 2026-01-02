@@ -1,3 +1,14 @@
+/// Compute the greatest common divisor of two numbers.
+///
+/// Uses the Euclidean algorithm.
+pub const fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
 /// Check if `n` is a prime number.
 ///
 /// Uses trial division up to sqrt(n). Suitable for validating
@@ -62,5 +73,15 @@ mod tests {
         assert!(is_prime(1009));
         assert!(is_prime(10007));
         assert!(is_prime(104729)); // 10000th prime
+    }
+
+    #[test]
+    fn gcd_basic() {
+        assert_eq!(gcd(12, 8), 4);
+        assert_eq!(gcd(17, 5), 1);
+        assert_eq!(gcd(100, 25), 25);
+        assert_eq!(gcd(7, 0), 7);
+        assert_eq!(gcd(0, 5), 5);
+        assert_eq!(gcd(48, 18), 6);
     }
 }

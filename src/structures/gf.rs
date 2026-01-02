@@ -6,6 +6,7 @@
 use crate::algebra::ring::Ring;
 use crate::structures::fp::Fp;
 use crate::structures::poly::Poly;
+use crate::utils::gcd;
 
 /// Returns a standard irreducible polynomial for GF(p^2).
 ///
@@ -319,15 +320,6 @@ fn is_primitive_root<const P: u64>(g: Fp<P>) -> bool {
     true
 }
 
-/// GCD helper function.
-const fn gcd(a: u64, b: u64) -> u64 {
-    if b == 0 {
-        a
-    } else {
-        gcd(b, a % b)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,13 +430,5 @@ mod tests {
             assert!(poly.is_primitive());
             assert_eq!(poly.degree(), Some(2));
         }
-    }
-
-    #[test]
-    fn gcd_basic() {
-        assert_eq!(gcd(12, 8), 4);
-        assert_eq!(gcd(17, 5), 1);
-        assert_eq!(gcd(100, 25), 25);
-        assert_eq!(gcd(7, 0), 7);
     }
 }

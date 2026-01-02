@@ -11,4 +11,4 @@ pub use structures::ext::TowerField;
 pub use structures::fp::Fp;
 pub use structures::gf;
 pub use structures::poly::Poly;
-pub use utils::is_prime;
+pub use utils::{gcd, is_prime};
