@@ -5,24 +5,117 @@ use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
 use crate::utils::is_prime;
 
+/// Compute -P^(-1) mod 2^64 using the Newton-Raphson method.
+///
+/// This is used for Montgomery reduction.
+const fn compute_p_inv(p: u64) -> u64 {
+    // We want x such that p * x ≡ -1 (mod 2^64)
+    // Start with x = 1, then iterate: x = x * (2 - p * x)
+    // Each iteration doubles the number of correct bits.
+    let mut x: u64 = 1;
+    let mut i = 0;
+    while i < 6 {
+        // 6 iterations: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 bits
+        x = x.wrapping_mul(2u64.wrapping_sub(p.wrapping_mul(x)));
+        i += 1;
+    }
+    x.wrapping_neg() // return -x = -p^(-1) mod 2^64
+}
+
+/// Compute R mod P where R = 2^64.
+const fn compute_r_mod_p(p: u64) -> u64 {
+    // R mod P = 2^64 mod P
+    // Since 2^64 = (2^64 - P) + P, we have 2^64 mod P = (2^64 - P) mod P
+    // But we can't represent 2^64 directly, so we compute it as:
+    // 2^64 mod P = (2^63 mod P) * 2 mod P, done carefully
+    let r = (1u128 << 64) % (p as u128);
+    r as u64
+}
+
+/// Compute R^2 mod P where R = 2^64.
+const fn compute_r2_mod_p(p: u64) -> u64 {
+    // R^2 mod P = 2^128 mod P
+    let r2 = ((1u128 << 64) % (p as u128)) as u128;
+    let r2 = (r2 * r2) % (p as u128);
+    r2 as u64
+}
+
+/// Montgomery constants for a given prime P.
+struct MontgomeryParams<const P: u64>;
+
+impl<const P: u64> MontgomeryParams<P> {
+    /// -P^(-1) mod 2^64
+    const P_INV: u64 = compute_p_inv(P);
+
+    /// R mod P where R = 2^64
+    const R: u64 = compute_r_mod_p(P);
+
+    /// R^2 mod P
+    const R2: u64 = compute_r2_mod_p(P);
+}
+
+/// Montgomery reduction: given T < P * R, compute T * R^(-1) mod P.
+#[inline]
+const fn montgomery_reduce<const P: u64>(t: u128) -> u64 {
+    // m = (T * P_INV) mod R
+    let m = (t as u64).wrapping_mul(MontgomeryParams::<P>::P_INV);
+    // t = (T + m * P) / R
+    let t = (t + (m as u128) * (P as u128)) >> 64;
+    // Conditional subtraction
+    let t = t as u64;
+    if t >= P {
+        t - P
+    } else {
+        t
+    }
+}
+
+/// Convert a value to Montgomery form: a -> aR mod P
+#[inline]
+const fn to_montgomery<const P: u64>(a: u64) -> u64 {
+    // aR mod P = (a * R^2) * R^(-1) mod P = montgomery_reduce(a * R^2)
+    montgomery_reduce::<P>((a as u128) * (MontgomeryParams::<P>::R2 as u128))
+}
+
+/// Convert from Montgomery form: aR -> a mod P
+#[inline]
+const fn from_montgomery<const P: u64>(a_mont: u64) -> u64 {
+    montgomery_reduce::<P>(a_mont as u128)
+}
+
 /// Prime field GF(p) where `p` is a `u64`-sized modulus.
+///
+/// Internally uses Montgomery representation for efficient multiplication.
+/// For correct field behavior, `P` must be an odd prime. Use [`Fp::validate_prime`]
+/// at startup to verify, or rely on `debug_assert!` checks during development.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Fp<const P: u64> {
-    value: u64,
+    /// Value stored in Montgomery form: value = aR mod P
+    mont: u64,
 }
 
 impl<const P: u64> Fp<P> {
-    /// Create a new field element, automatically reduced modulo `P`.
+    /// Create a new field element from a standard integer.
     ///
-    /// In debug builds, this asserts that `P` is prime.
+    /// In debug builds, this asserts that `P` is an odd prime.
     pub fn new(value: u64) -> Self {
         debug_assert!(is_prime(P), "Fp modulus P={} is not prime", P);
-        Self { value: value % P }
+        debug_assert!(P % 2 == 1, "Fp modulus P={} must be odd for Montgomery", P);
+        let reduced = value % P;
+        Self {
+            mont: to_montgomery::<P>(reduced),
+        }
+    }
+
+    /// Create from a value already in Montgomery form.
+    #[inline]
+    const fn from_mont(mont: u64) -> Self {
+        Self { mont }
     }
 
     /// Get the representative in `[0, P-1]`.
     pub const fn value(self) -> u64 {
-        self.value
+        from_montgomery::<P>(self.mont)
     }
 
     /// The modulus `p`.
@@ -30,9 +123,9 @@ impl<const P: u64> Fp<P> {
         P
     }
 
-    /// Validate that the modulus `P` is prime.
+    /// Validate that the modulus `P` is a valid odd prime.
     ///
-    /// Returns `Ok(())` if `P` is prime, or an error message otherwise.
+    /// Returns `Ok(())` if `P` is an odd prime, or an error message otherwise.
     /// Call this at application startup for early failure on misconfiguration.
     ///
     /// # Example
@@ -47,6 +140,9 @@ impl<const P: u64> Fp<P> {
     /// assert!(F15::validate_prime().is_err());
     /// ```
     pub const fn validate_prime() -> Result<(), &'static str> {
+        if P == 2 {
+            return Err("modulus P=2 is not supported (must be odd for Montgomery)");
+        }
         if !is_prime(P) {
             return Err("modulus P is not prime");
         }
@@ -56,7 +152,7 @@ impl<const P: u64> Fp<P> {
 
 impl<const P: u64> fmt::Debug for Fp<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Fp<{}>({})", P, self.value)
+        write!(f, "Fp<{}>({})", P, self.value())
     }
 }
 
@@ -67,11 +163,11 @@ impl<const P: u64> Add for Fp<P> {
 
     #[inline]
     fn add(self, rhs: Self) -> Self::Output {
-        let mut sum = self.value + rhs.value;
+        let mut sum = self.mont + rhs.mont;
         if sum >= P {
             sum -= P;
         }
-        Self { value: sum }
+        Self::from_mont(sum)
     }
 }
 
@@ -80,15 +176,10 @@ impl<const P: u64> Sub for Fp<P> {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
-        // self - rhs ≡ self + (P - rhs)  (mod P)
-        if self.value >= rhs.value {
-            Self {
-                value: self.value - rhs.value,
-            }
+        if self.mont >= rhs.mont {
+            Self::from_mont(self.mont - rhs.mont)
         } else {
-            Self {
-                value: self.value + P - rhs.value,
-            }
+            Self::from_mont(self.mont + P - rhs.mont)
         }
     }
 }
@@ -98,12 +189,9 @@ impl<const P: u64> Mul for Fp<P> {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
-        // Use u128 to avoid overflow for moderately sized P.
-        let prod = (self.value as u128) * (rhs.value as u128);
-        let m = P as u128;
-        Self {
-            value: (prod % m) as u64,
-        }
+        // (aR) * (bR) = abR^2, then reduce to get abR
+        let prod = (self.mont as u128) * (rhs.mont as u128);
+        Self::from_mont(montgomery_reduce::<P>(prod))
     }
 }
 
@@ -112,12 +200,10 @@ impl<const P: u64> Neg for Fp<P> {
 
     #[inline]
     fn neg(self) -> Self::Output {
-        if self.value == 0 {
+        if self.mont == 0 {
             self
         } else {
-            Self {
-                value: P - self.value,
-            }
+            Self::from_mont(P - self.mont)
         }
     }
 }
@@ -135,29 +221,31 @@ impl<const P: u64> Div for Fp<P> {
 /* ---- implement Ring ---- */
 
 impl<const P: u64> Ring for Fp<P> {
-    const ZERO: Self = Self { value: 0 };
-    const ONE: Self = Self { value: 1 };
+    const ZERO: Self = Self {
+        mont: 0, // 0 in Montgomery form is still 0
+    };
+    const ONE: Self = Self {
+        mont: MontgomeryParams::<P>::R, // 1 in Montgomery form is R mod P
+    };
 }
 
 /* ---- implement Field ---- */
 
 impl<const P: u64> Field for Fp<P> {
     fn inverse(self) -> Option<Self> {
-        if self.value == 0 {
+        if self.mont == 0 {
             return None;
         }
 
-        // Extended Euclidean algorithm to find x such that a*x ≡ 1 (mod P)
-        let a = self.value as i128;
+        // Convert out of Montgomery form, compute inverse, convert back
+        let a = self.value();
         let m = P as i128;
 
-        let (g, x, _) = egcd(a, m);
+        let (g, x, _) = egcd(a as i128, m);
         if g != 1 {
-            // Not invertible: gcd(a, P) != 1 (this can happen if P is not prime)
             return None;
         }
 
-        // x may be negative, so bring it into [0, P-1]
         let mut x = x % m;
         if x < 0 {
             x += m;
@@ -187,6 +275,30 @@ mod tests {
     use crate::algebra::ring::Ring;
 
     type F17 = Fp<17>;
+
+    #[test]
+    fn montgomery_constants() {
+        // Verify Montgomery constants for P=17
+        // R = 2^64 mod 17
+        let r = (1u128 << 64) % 17;
+        assert_eq!(MontgomeryParams::<17>::R, r as u64);
+
+        // R^2 mod 17
+        let r2 = (r * r) % 17;
+        assert_eq!(MontgomeryParams::<17>::R2, r2 as u64);
+
+        // Verify P_INV: P * P_INV ≡ -1 (mod 2^64)
+        let check = 17u64.wrapping_mul(MontgomeryParams::<17>::P_INV);
+        assert_eq!(check, u64::MAX); // -1 mod 2^64
+    }
+
+    #[test]
+    fn to_from_montgomery() {
+        for x in 0u64..17 {
+            let fp = F17::new(x);
+            assert_eq!(fp.value(), x);
+        }
+    }
 
     #[test]
     fn add_basic() {
@@ -226,8 +338,13 @@ mod tests {
     }
 
     #[test]
+    fn zero_and_one() {
+        assert_eq!(F17::ZERO.value(), 0);
+        assert_eq!(F17::ONE.value(), 1);
+    }
+
+    #[test]
     fn validate_prime_ok() {
-        assert!(Fp::<2>::validate_prime().is_ok());
         assert!(Fp::<3>::validate_prime().is_ok());
         assert!(Fp::<17>::validate_prime().is_ok());
         assert!(Fp::<101>::validate_prime().is_ok());
@@ -236,8 +353,18 @@ mod tests {
     #[test]
     fn validate_prime_err() {
         assert!(Fp::<1>::validate_prime().is_err());
+        assert!(Fp::<2>::validate_prime().is_err()); // P=2 not supported
         assert!(Fp::<4>::validate_prime().is_err());
         assert!(Fp::<15>::validate_prime().is_err());
         assert!(Fp::<100>::validate_prime().is_err());
+    }
+
+    #[test]
+    fn larger_prime() {
+        type F101 = Fp<101>;
+        let a = F101::new(50);
+        let b = F101::new(60);
+        assert_eq!((a + b).value(), 9); // 50 + 60 = 110 ≡ 9 (mod 101)
+        assert_eq!((a * b).value(), (3000 % 101) as u64);
     }
 }
