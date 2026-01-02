@@ -211,6 +211,157 @@ impl<const P: u64> Fp<P> {
         }
     }
 
+    /// Compute the Legendre symbol (a/p).
+    ///
+    /// Returns:
+    /// - `1` if `a` is a quadratic residue (has a square root) and `a != 0`
+    /// - `-1` if `a` is a non-residue (no square root)
+    /// - `0` if `a == 0`
+    ///
+    /// Uses Euler's criterion: `a^((p-1)/2) = (a/p) mod p`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::Fp;
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // 2 is a quadratic residue mod 17 (6^2 = 36 = 2 mod 17)
+    /// assert_eq!(F17::new(2).legendre(), 1);
+    ///
+    /// // 3 is not a quadratic residue mod 17
+    /// assert_eq!(F17::new(3).legendre(), -1);
+    ///
+    /// assert_eq!(F17::new(0).legendre(), 0);
+    /// ```
+    pub fn legendre(self) -> i8 {
+        if self.mont == 0 {
+            return 0;
+        }
+
+        // Euler's criterion: a^((p-1)/2) mod p
+        let result = self.pow((P - 1) / 2);
+
+        if result == Self::ONE {
+            1
+        } else {
+            // result == P - 1 (i.e., -1 mod P)
+            -1
+        }
+    }
+
+    /// Check if this element is a quadratic residue (has a square root).
+    ///
+    /// Returns `true` if there exists some `x` such that `x^2 = self`.
+    /// Zero is considered a quadratic residue (with sqrt = 0).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::Fp;
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// assert!(F17::new(0).is_quadratic_residue());
+    /// assert!(F17::new(1).is_quadratic_residue());
+    /// assert!(F17::new(2).is_quadratic_residue());
+    /// assert!(!F17::new(3).is_quadratic_residue());
+    /// ```
+    pub fn is_quadratic_residue(self) -> bool {
+        self.legendre() >= 0
+    }
+
+    /// Compute a square root using the Tonelli-Shanks algorithm.
+    ///
+    /// Returns `Some(r)` where `r^2 = self`, or `None` if no square root exists.
+    /// When two roots exist (±r), returns the smaller one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::Fp;
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let a = F17::new(2);
+    /// let r = a.sqrt().unwrap();
+    /// assert_eq!(r * r, a);
+    ///
+    /// // 3 has no square root mod 17
+    /// assert!(F17::new(3).sqrt().is_none());
+    /// ```
+    pub fn sqrt(self) -> Option<Self> {
+        // Handle zero
+        if self.mont == 0 {
+            return Some(Self::ZERO);
+        }
+
+        // Check if quadratic residue
+        if self.legendre() != 1 {
+            return None;
+        }
+
+        // Special case: p ≡ 3 (mod 4)
+        // sqrt(a) = a^((p+1)/4)
+        if P % 4 == 3 {
+            let r = self.pow((P + 1) / 4);
+            return Some(self.normalize_sqrt(r));
+        }
+
+        // General case: Tonelli-Shanks algorithm
+        // Write p - 1 = Q * 2^S where Q is odd
+        let mut q = P - 1;
+        let mut s = 0u32;
+        while q % 2 == 0 {
+            q /= 2;
+            s += 1;
+        }
+
+        // Find a quadratic non-residue z
+        let mut z = Self::new(2);
+        while z.legendre() != -1 {
+            z = z + Self::ONE;
+        }
+
+        let mut m = s;
+        let mut c = z.pow(q);
+        let mut t = self.pow(q);
+        let mut r = self.pow((q + 1) / 2);
+
+        loop {
+            if t == Self::ONE {
+                return Some(self.normalize_sqrt(r));
+            }
+
+            // Find the least i such that t^(2^i) = 1
+            let mut i = 1u32;
+            let mut t_pow = t * t;
+            while t_pow != Self::ONE {
+                t_pow = t_pow * t_pow;
+                i += 1;
+            }
+
+            // Update values
+            let b = c.pow(1u64 << (m - i - 1));
+            m = i;
+            c = b * b;
+            t = t * c;
+            r = r * b;
+        }
+    }
+
+    /// Return the canonical (smaller) square root.
+    #[inline]
+    fn normalize_sqrt(self, r: Self) -> Self {
+        let neg_r = -r;
+        if r.value() <= neg_r.value() {
+            r
+        } else {
+            neg_r
+        }
+    }
+
     /// Batch inversion using Montgomery's trick.
     ///
     /// Computes the multiplicative inverse of each element in the slice
@@ -688,6 +839,116 @@ mod tests {
             let pos = a.pow_signed(n).unwrap();
             let neg = a.pow_signed(-n).unwrap();
             assert_eq!(pos * neg, F17::ONE);
+        }
+    }
+
+    #[test]
+    fn legendre_zero() {
+        assert_eq!(F17::ZERO.legendre(), 0);
+    }
+
+    #[test]
+    fn legendre_residues() {
+        // Quadratic residues mod 17: 1, 2, 4, 8, 9, 13, 15, 16
+        let residues = [1, 2, 4, 8, 9, 13, 15, 16];
+        for &r in &residues {
+            assert_eq!(F17::new(r).legendre(), 1, "{} should be a residue", r);
+        }
+    }
+
+    #[test]
+    fn legendre_non_residues() {
+        // Non-residues mod 17: 3, 5, 6, 7, 10, 11, 12, 14
+        let non_residues = [3, 5, 6, 7, 10, 11, 12, 14];
+        for &n in &non_residues {
+            assert_eq!(F17::new(n).legendre(), -1, "{} should be a non-residue", n);
+        }
+    }
+
+    #[test]
+    fn is_quadratic_residue_basic() {
+        assert!(F17::ZERO.is_quadratic_residue());
+        assert!(F17::ONE.is_quadratic_residue());
+        assert!(F17::new(4).is_quadratic_residue()); // 2^2 = 4
+        assert!(!F17::new(3).is_quadratic_residue());
+    }
+
+    #[test]
+    fn sqrt_zero() {
+        assert_eq!(F17::ZERO.sqrt(), Some(F17::ZERO));
+    }
+
+    #[test]
+    fn sqrt_one() {
+        assert_eq!(F17::ONE.sqrt(), Some(F17::ONE));
+    }
+
+    #[test]
+    fn sqrt_perfect_squares() {
+        // Test all perfect squares in F17
+        for x in 0u64..17 {
+            let a = F17::new(x);
+            let a_sq = a * a;
+            let r = a_sq.sqrt().expect("perfect square should have sqrt");
+            assert_eq!(
+                r * r,
+                a_sq,
+                "sqrt({})^2 should equal {}",
+                a_sq.value(),
+                a_sq.value()
+            );
+        }
+    }
+
+    #[test]
+    fn sqrt_non_residues() {
+        // Non-residues should return None
+        let non_residues = [3, 5, 6, 7, 10, 11, 12, 14];
+        for &n in &non_residues {
+            assert!(F17::new(n).sqrt().is_none(), "{} should have no sqrt", n);
+        }
+    }
+
+    #[test]
+    fn sqrt_canonical() {
+        // sqrt should return the smaller of the two roots
+        for x in 1u64..17 {
+            let a = F17::new(x);
+            if let Some(r) = a.sqrt() {
+                let neg_r = -r;
+                assert!(
+                    r.value() <= neg_r.value(),
+                    "sqrt should return smaller root"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sqrt_p_mod_4_eq_1() {
+        // Test with a prime where p ≡ 1 (mod 4), which uses full Tonelli-Shanks
+        // 41 ≡ 1 (mod 4)
+        type F41 = Fp<41>;
+
+        for x in 0u64..41 {
+            let a = F41::new(x);
+            let a_sq = a * a;
+            let r = a_sq.sqrt().expect("perfect square should have sqrt");
+            assert_eq!(r * r, a_sq);
+        }
+    }
+
+    #[test]
+    fn sqrt_p_mod_4_eq_3() {
+        // Test with a prime where p ≡ 3 (mod 4), which uses fast path
+        // 23 ≡ 3 (mod 4)
+        type F23 = Fp<23>;
+
+        for x in 0u64..23 {
+            let a = F23::new(x);
+            let a_sq = a * a;
+            let r = a_sq.sqrt().expect("perfect square should have sqrt");
+            assert_eq!(r * r, a_sq);
         }
     }
 }
