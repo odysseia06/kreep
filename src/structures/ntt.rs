@@ -50,7 +50,7 @@ pub fn ntt_info<const P: u64>() -> Option<NttInfo> {
     let mut max_log2 = 0u32;
 
     // Factor out powers of 2
-    while p_minus_1 % 2 == 0 {
+    while p_minus_1.is_multiple_of(2) {
         p_minus_1 /= 2;
         max_log2 += 1;
     }
@@ -105,9 +105,9 @@ fn prime_factors(mut n: u64) -> Vec<u64> {
 
     let mut d = 2;
     while d * d <= n {
-        if n % d == 0 {
+        if n.is_multiple_of(d) {
             factors.push(d);
-            while n % d == 0 {
+            while n.is_multiple_of(d) {
                 n /= d;
             }
         }

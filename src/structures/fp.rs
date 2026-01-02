@@ -35,7 +35,7 @@ const fn compute_r_mod_p(p: u64) -> u64 {
 /// Compute R^2 mod P where R = 2^64.
 const fn compute_r2_mod_p(p: u64) -> u64 {
     // R^2 mod P = 2^128 mod P
-    let r2 = ((1u128 << 64) % (p as u128)) as u128;
+    let r2 = (1u128 << 64) % (p as u128);
     let r2 = (r2 * r2) % (p as u128);
     r2 as u64
 }
@@ -431,7 +431,7 @@ impl<const P: u64> Fp<P> {
         // Write p - 1 = Q * 2^S where Q is odd
         let mut q = P - 1;
         let mut s = 0u32;
-        while q % 2 == 0 {
+        while q.is_multiple_of(2) {
             q /= 2;
             s += 1;
         }
@@ -445,7 +445,7 @@ impl<const P: u64> Fp<P> {
         let mut m = s;
         let mut c = z.pow(q);
         let mut t = self.pow(q);
-        let mut r = self.pow((q + 1) / 2);
+        let mut r = self.pow(q.div_ceil(2));
 
         loop {
             if t == Self::ONE {
@@ -696,6 +696,7 @@ impl<const P: u64> Div for Fp<P> {
     type Output = Self;
 
     #[inline]
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self::Output {
         self * rhs.inverse().expect("division by zero in Fp")
     }

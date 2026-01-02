@@ -250,8 +250,8 @@ impl<const P: u64, const D: usize> Add for ExtField<P, D> {
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut coeffs = [Fp::ZERO; D];
-        for i in 0..D {
-            coeffs[i] = self.coeffs[i] + rhs.coeffs[i];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = self.coeffs[i] + rhs.coeffs[i];
         }
         Self { coeffs }
     }
@@ -262,8 +262,8 @@ impl<const P: u64, const D: usize> Sub for ExtField<P, D> {
 
     fn sub(self, rhs: Self) -> Self::Output {
         let mut coeffs = [Fp::ZERO; D];
-        for i in 0..D {
-            coeffs[i] = self.coeffs[i] - rhs.coeffs[i];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = self.coeffs[i] - rhs.coeffs[i];
         }
         Self { coeffs }
     }
@@ -274,8 +274,8 @@ impl<const P: u64, const D: usize> Neg for ExtField<P, D> {
 
     fn neg(self) -> Self::Output {
         let mut coeffs = [Fp::ZERO; D];
-        for i in 0..D {
-            coeffs[i] = -self.coeffs[i];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = -self.coeffs[i];
         }
         Self { coeffs }
     }
@@ -287,8 +287,8 @@ impl<const P: u64, const D: usize> Mul<Fp<P>> for ExtField<P, D> {
 
     fn mul(self, rhs: Fp<P>) -> Self::Output {
         let mut coeffs = [Fp::ZERO; D];
-        for i in 0..D {
-            coeffs[i] = self.coeffs[i] * rhs;
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = self.coeffs[i] * rhs;
         }
         Self { coeffs }
     }
@@ -462,8 +462,8 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
     /// - `other`: The element to multiply with
     /// - `inner_mod`: Irreducible polynomial for F_p → F_{p^D1}
     /// - `outer_mod`: Coefficients of the irreducible polynomial for F_{p^D1} → F_{p^{D1*D2}}
-    ///                Given as D2 elements representing the non-leading coefficients
-    ///                (the polynomial is monic, so the leading coefficient y^D2 is implicitly 1)
+    ///   Given as D2 elements representing the non-leading coefficients
+    ///   (the polynomial is monic, so the leading coefficient y^D2 is implicitly 1)
     pub fn mul_mod(
         &self,
         other: &Self,
@@ -496,9 +496,8 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
         let mut result = [ExtField::<P, D1>::zero(); D2];
 
         // Copy lower coefficients
-        for i in 0..D2.min(poly.len()) {
-            result[i] = poly[i];
-        }
+        let copy_len = D2.min(poly.len());
+        result[..copy_len].clone_from_slice(&poly[..copy_len]);
 
         // Reduce higher coefficients from highest to lowest
         // y^D2 ≡ -(outer_mod[0] + ... + outer_mod[D2-1]*y^{D2-1})
@@ -508,8 +507,8 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
             if !high_coeff.is_zero() {
                 // y^i = y^{i-D2} * y^D2 ≡ -y^{i-D2} * (outer_mod[0] + ... + outer_mod[D2-1]*y^{D2-1})
                 let shift = i - D2;
-                for j in 0..D2.min(outer_mod.len()) {
-                    let term = high_coeff.mul_mod(&outer_mod[j], inner_mod);
+                for (j, om) in outer_mod.iter().enumerate().take(D2) {
+                    let term = high_coeff.mul_mod(om, inner_mod);
                     let neg_term = ExtField::zero() - term;
                     let target = shift + j;
                     if target < D2 {
@@ -610,8 +609,8 @@ impl<const P: u64, const D1: usize, const D2: usize> Add for TowerField<P, D1, D
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut coeffs = [ExtField::zero(); D2];
-        for i in 0..D2 {
-            coeffs[i] = self.coeffs[i] + rhs.coeffs[i];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = self.coeffs[i] + rhs.coeffs[i];
         }
         Self { coeffs }
     }
@@ -622,8 +621,8 @@ impl<const P: u64, const D1: usize, const D2: usize> Sub for TowerField<P, D1, D
 
     fn sub(self, rhs: Self) -> Self::Output {
         let mut coeffs = [ExtField::zero(); D2];
-        for i in 0..D2 {
-            coeffs[i] = self.coeffs[i] - rhs.coeffs[i];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = self.coeffs[i] - rhs.coeffs[i];
         }
         Self { coeffs }
     }
@@ -634,8 +633,8 @@ impl<const P: u64, const D1: usize, const D2: usize> Neg for TowerField<P, D1, D
 
     fn neg(self) -> Self::Output {
         let mut coeffs = [ExtField::zero(); D2];
-        for i in 0..D2 {
-            coeffs[i] = -self.coeffs[i];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = -self.coeffs[i];
         }
         Self { coeffs }
     }
@@ -651,13 +650,13 @@ impl<const P: u64, const D1: usize, const D2: usize> Mul<ExtField<P, D1>>
         // Note: This is coefficient-wise, not field multiplication
         // For proper field multiplication, use mul_mod
         let mut coeffs = [ExtField::zero(); D2];
-        for i in 0..D2 {
+        for (i, c) in coeffs.iter_mut().enumerate() {
             // We can't properly multiply without the inner modulus
             // This is just for scaling by constants where modular reduction isn't needed
-            coeffs[i] = ExtField::new({
+            *c = ExtField::new({
                 let mut arr = [Fp::ZERO; D1];
-                for j in 0..D1 {
-                    arr[j] = self.coeffs[i].coeff(j) * rhs.coeff(0);
+                for (j, a) in arr.iter_mut().enumerate() {
+                    *a = self.coeffs[i].coeff(j) * rhs.coeff(0);
                 }
                 arr
             });

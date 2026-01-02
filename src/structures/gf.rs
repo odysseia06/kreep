@@ -625,13 +625,13 @@ fn is_primitive_root<const P: u64>(g: Fp<P>) -> bool {
     let mut q = 2u64;
 
     while q * q <= temp {
-        if temp % q == 0 {
+        if temp.is_multiple_of(q) {
             // q is a prime divisor
             let exp = order / q;
             if g.pow(exp) == Fp::ONE {
                 return false;
             }
-            while temp % q == 0 {
+            while temp.is_multiple_of(q) {
                 temp /= q;
             }
         }

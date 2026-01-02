@@ -1,7 +1,6 @@
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
-use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
 use crate::structures::fp::Fp;
 
@@ -537,9 +536,9 @@ impl<const P: u64> Poly<P> {
         let mut d = 2;
 
         while d * d <= n {
-            if n % d == 0 {
+            if n.is_multiple_of(d) {
                 primes.push(d);
-                while n % d == 0 {
+                while n.is_multiple_of(d) {
                     n /= d;
                 }
             }
@@ -651,9 +650,9 @@ impl<const P: u64> Poly<P> {
         let mut d: u64 = 2;
 
         while d.saturating_mul(d) <= n {
-            if n % d == 0 {
+            if n.is_multiple_of(d) {
                 primes.push(d);
-                while n % d == 0 {
+                while n.is_multiple_of(d) {
                     n /= d;
                 }
             }
@@ -773,9 +772,8 @@ impl<const P: u64> Poly<P> {
             let mut basis = Self::constant(Fp::ONE);
             let mut denom = Fp::ONE;
 
-            for j in 0..n {
+            for (j, &(xj, _)) in points.iter().enumerate() {
                 if i != j {
-                    let xj = points[j].0;
                     // Multiply by (x - x_j)
                     basis = basis * Self::new(vec![-xj, Fp::ONE]);
                     // Accumulate denominator (x_i - x_j)
