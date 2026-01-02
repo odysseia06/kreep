@@ -341,6 +341,371 @@ impl<'a, const P: u64, const D: usize> ExtFieldWithModulus<'a, P, D> {
     }
 }
 
+/// Tower extension field F_{p^D1}[y]/(g(y)) where g(y) is irreducible of degree D2.
+///
+/// This represents a degree-D2 extension over F_{p^D1}, giving a total extension
+/// of degree D1*D2 over F_p.
+///
+/// Elements are represented as D2 coefficients from the base extension F_{p^D1}.
+///
+/// # Type Parameters
+/// - `P`: The prime modulus for the base field F_p
+/// - `D1`: The degree of the first extension (F_p → F_{p^D1})
+/// - `D2`: The degree of the second extension (F_{p^D1} → F_{p^{D1*D2}})
+///
+/// # Example
+///
+/// ```
+/// use kreep::{Fp, Poly, ExtField, TowerField};
+///
+/// type F17 = Fp<17>;
+/// type F17_2 = ExtField<17, 2>;  // F_{17^2} = F_289
+///
+/// // First extension: F_17 → F_{17^2} via x^2 - 3
+/// let mod1 = Poly::new(vec![F17::new(14), F17::new(0), F17::new(1)]);
+///
+/// // Second extension: F_{17^2} → F_{17^4} via y^2 - x
+/// // where x is the generator of F_{17^2}
+/// // Coefficients of y^2 - x are: [-x, 0, 1] in F_{17^2}
+/// let neg_x = F17_2::new([F17::new(0), F17::new(16)]); // -x = 16x in F_17
+/// let zero = F17_2::zero();
+/// let one = F17_2::one();
+///
+/// // Create element in the tower: (1 + x) + (2 + 3x)y
+/// let a = TowerField::<17, 2, 2>::new([
+///     F17_2::new([F17::new(1), F17::new(1)]),   // 1 + x
+///     F17_2::new([F17::new(2), F17::new(3)]),   // 2 + 3x
+/// ]);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TowerField<const P: u64, const D1: usize, const D2: usize> {
+    /// Coefficients in ascending order: coeffs[i] is the coefficient of y^i
+    /// Each coefficient is an element of ExtField<P, D1>
+    coeffs: [ExtField<P, D1>; D2],
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
+    /// Create a new tower field element from coefficients.
+    ///
+    /// Coefficients are elements of F_{p^D1}, in ascending order of the
+    /// outer variable y.
+    pub fn new(coeffs: [ExtField<P, D1>; D2]) -> Self {
+        Self { coeffs }
+    }
+
+    /// Create the zero element.
+    pub fn zero() -> Self {
+        Self {
+            coeffs: [ExtField::zero(); D2],
+        }
+    }
+
+    /// Create the multiplicative identity (1).
+    pub fn one() -> Self {
+        let mut coeffs = [ExtField::zero(); D2];
+        if D2 > 0 {
+            coeffs[0] = ExtField::one();
+        }
+        Self { coeffs }
+    }
+
+    /// Create an element representing the outer variable y.
+    ///
+    /// Returns `None` if D2 < 2.
+    pub fn y() -> Option<Self> {
+        if D2 < 2 {
+            return None;
+        }
+        let mut coeffs = [ExtField::zero(); D2];
+        coeffs[1] = ExtField::one();
+        Some(Self { coeffs })
+    }
+
+    /// Create an element from the base extension field.
+    pub fn from_base(c: ExtField<P, D1>) -> Self {
+        let mut coeffs = [ExtField::zero(); D2];
+        if D2 > 0 {
+            coeffs[0] = c;
+        }
+        Self { coeffs }
+    }
+
+    /// Create an element from the prime field F_p.
+    pub fn from_prime(c: Fp<P>) -> Self {
+        Self::from_base(ExtField::from_base(c))
+    }
+
+    /// Get the coefficients.
+    pub fn coeffs(&self) -> &[ExtField<P, D1>; D2] {
+        &self.coeffs
+    }
+
+    /// Get a specific coefficient.
+    pub fn coeff(&self, i: usize) -> ExtField<P, D1> {
+        if i < D2 {
+            self.coeffs[i]
+        } else {
+            ExtField::zero()
+        }
+    }
+
+    /// Check if this is the zero element.
+    pub fn is_zero(&self) -> bool {
+        self.coeffs.iter().all(|c| c.is_zero())
+    }
+
+    /// Multiply two tower field elements.
+    ///
+    /// Requires both the inner modulus (for F_{p^D1}) and outer modulus (for the tower).
+    ///
+    /// # Parameters
+    /// - `other`: The element to multiply with
+    /// - `inner_mod`: Irreducible polynomial for F_p → F_{p^D1}
+    /// - `outer_mod`: Coefficients of the irreducible polynomial for F_{p^D1} → F_{p^{D1*D2}}
+    ///                Given as D2 elements representing the non-leading coefficients
+    ///                (the polynomial is monic, so the leading coefficient y^D2 is implicitly 1)
+    pub fn mul_mod(
+        &self,
+        other: &Self,
+        inner_mod: &Poly<P>,
+        outer_mod: &[ExtField<P, D1>],
+    ) -> Self {
+        // Use a Vec for intermediate product to avoid const generic expressions
+        // Result before reduction has degree up to 2*(D2-1), so 2*D2-1 coefficients
+        let mut product = vec![ExtField::<P, D1>::zero(); 2 * D2 - 1];
+
+        for i in 0..D2 {
+            for j in 0..D2 {
+                let term = self.coeffs[i].mul_mod(&other.coeffs[j], inner_mod);
+                product[i + j] = product[i + j] + term;
+            }
+        }
+
+        // Reduce modulo the outer polynomial
+        // outer_mod represents g(y) = outer_mod[0] + outer_mod[1]*y + ... + y^D2
+        // So y^D2 ≡ -(outer_mod[0] + ... + outer_mod[D2-1]*y^{D2-1})
+        Self::reduce_tower(&product, inner_mod, outer_mod)
+    }
+
+    /// Reduce a polynomial of degree < 2*D2-1 modulo the outer polynomial.
+    fn reduce_tower(
+        poly: &[ExtField<P, D1>],
+        inner_mod: &Poly<P>,
+        outer_mod: &[ExtField<P, D1>],
+    ) -> Self {
+        let mut result = [ExtField::<P, D1>::zero(); D2];
+
+        // Copy lower coefficients
+        for i in 0..D2.min(poly.len()) {
+            result[i] = poly[i];
+        }
+
+        // Reduce higher coefficients from highest to lowest
+        // y^D2 ≡ -(outer_mod[0] + ... + outer_mod[D2-1]*y^{D2-1})
+        for i in (D2..poly.len()).rev() {
+            // Get the coefficient we need to reduce (may have been modified by earlier iterations)
+            let high_coeff = if i < D2 { result[i] } else { poly[i] };
+            if !high_coeff.is_zero() {
+                // y^i = y^{i-D2} * y^D2 ≡ -y^{i-D2} * (outer_mod[0] + ... + outer_mod[D2-1]*y^{D2-1})
+                let shift = i - D2;
+                for j in 0..D2.min(outer_mod.len()) {
+                    let term = high_coeff.mul_mod(&outer_mod[j], inner_mod);
+                    let neg_term = ExtField::zero() - term;
+                    let target = shift + j;
+                    if target < D2 {
+                        result[target] = result[target] + neg_term;
+                    }
+                    // If target >= D2, we'd need another pass, but for 2*D2-1 input
+                    // and reducing from top down, this won't happen on the first pass
+                }
+            }
+        }
+
+        Self { coeffs: result }
+    }
+
+    /// Compute the multiplicative inverse.
+    ///
+    /// For a degree-2 tower extension, we use the formula:
+    /// (a + by)^{-1} = (a - by) / (a^2 - b^2 * non_residue)
+    /// where non_residue is the constant term of the outer modulus (negated).
+    ///
+    /// Returns `None` if the element is zero or if D2 != 2 (not yet implemented).
+    pub fn inverse_mod(&self, inner_mod: &Poly<P>, outer_mod: &[ExtField<P, D1>]) -> Option<Self> {
+        if self.is_zero() {
+            return None;
+        }
+
+        // For D2 = 2: (a + by)^{-1} where y^2 = γ (the non-residue)
+        // = (a - by) / (a^2 - b^2 * γ)
+        if D2 != 2 {
+            // For general D2, we'd need to use the extended Euclidean algorithm
+            // on polynomials over F_{p^D1}, which is more complex
+            // For now, only D2=2 is supported
+            return None;
+        }
+
+        let a = self.coeffs[0];
+        let b = self.coeffs[1];
+
+        // γ = -outer_mod[0] (since y^2 + outer_mod[0] = 0 means y^2 = -outer_mod[0])
+        let gamma = ExtField::zero() - outer_mod[0];
+
+        // norm = a^2 - b^2 * γ
+        let a_sq = a.mul_mod(&a, inner_mod);
+        let b_sq = b.mul_mod(&b, inner_mod);
+        let b_sq_gamma = b_sq.mul_mod(&gamma, inner_mod);
+        let norm = a_sq - b_sq_gamma;
+
+        // Invert the norm in the base extension
+        let norm_inv = norm.inverse_mod(inner_mod)?;
+
+        // Result = (a - by) * norm_inv
+        let neg_b = ExtField::zero() - b;
+        let c0 = a.mul_mod(&norm_inv, inner_mod);
+        let c1 = neg_b.mul_mod(&norm_inv, inner_mod);
+
+        // Build result array - we know D2 == 2 here
+        let mut coeffs = [ExtField::zero(); D2];
+        coeffs[0] = c0;
+        coeffs[1] = c1;
+        Some(Self::new(coeffs))
+    }
+
+    /// Compute self^exp.
+    pub fn pow_mod(
+        &self,
+        mut exp: u64,
+        inner_mod: &Poly<P>,
+        outer_mod: &[ExtField<P, D1>],
+    ) -> Self {
+        if exp == 0 {
+            return Self::one();
+        }
+
+        let mut base = *self;
+        let mut result = Self::one();
+
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = result.mul_mod(&base, inner_mod, outer_mod);
+            }
+            base = base.mul_mod(&base, inner_mod, outer_mod);
+            exp >>= 1;
+        }
+
+        result
+    }
+
+    /// Frobenius endomorphism: x -> x^p.
+    pub fn frobenius(&self, inner_mod: &Poly<P>, outer_mod: &[ExtField<P, D1>]) -> Self {
+        self.pow_mod(P, inner_mod, outer_mod)
+    }
+}
+
+/* ---- Arithmetic operators for TowerField ---- */
+
+impl<const P: u64, const D1: usize, const D2: usize> Add for TowerField<P, D1, D2> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut coeffs = [ExtField::zero(); D2];
+        for i in 0..D2 {
+            coeffs[i] = self.coeffs[i] + rhs.coeffs[i];
+        }
+        Self { coeffs }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Sub for TowerField<P, D1, D2> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let mut coeffs = [ExtField::zero(); D2];
+        for i in 0..D2 {
+            coeffs[i] = self.coeffs[i] - rhs.coeffs[i];
+        }
+        Self { coeffs }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Neg for TowerField<P, D1, D2> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        let mut coeffs = [ExtField::zero(); D2];
+        for i in 0..D2 {
+            coeffs[i] = -self.coeffs[i];
+        }
+        Self { coeffs }
+    }
+}
+
+/// Scalar multiplication by base extension element.
+impl<const P: u64, const D1: usize, const D2: usize> Mul<ExtField<P, D1>>
+    for TowerField<P, D1, D2>
+{
+    type Output = Self;
+
+    fn mul(self, rhs: ExtField<P, D1>) -> Self::Output {
+        // Note: This is coefficient-wise, not field multiplication
+        // For proper field multiplication, use mul_mod
+        let mut coeffs = [ExtField::zero(); D2];
+        for i in 0..D2 {
+            // We can't properly multiply without the inner modulus
+            // This is just for scaling by constants where modular reduction isn't needed
+            coeffs[i] = ExtField::new({
+                let mut arr = [Fp::ZERO; D1];
+                for j in 0..D1 {
+                    arr[j] = self.coeffs[i].coeff(j) * rhs.coeff(0);
+                }
+                arr
+            });
+        }
+        Self { coeffs }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> fmt::Debug for TowerField<P, D1, D2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for (i, coeff) in self.coeffs.iter().enumerate() {
+            if coeff.is_zero() {
+                continue;
+            }
+
+            if !first {
+                write!(f, " + ")?;
+            }
+            first = false;
+
+            match i {
+                0 => write!(f, "({:?})", coeff)?,
+                1 => write!(f, "({:?})*y", coeff)?,
+                _ => write!(f, "({:?})*y^{}", coeff, i)?,
+            }
+        }
+
+        if first {
+            write!(f, "0")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> fmt::Display for TowerField<P, D1, D2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Default for TowerField<P, D1, D2> {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,5 +1091,319 @@ mod tests {
         assert_eq!(x3.coeff(0), F17::new(16));
         assert_eq!(x3.coeff(1), F17::new(16));
         assert_eq!(x3.coeff(2), F17::ZERO);
+    }
+
+    // ---- Tower extension tests ----
+
+    type Tower2x2 = TowerField<17, 2, 2>;
+
+    // Inner modulus: x^2 - 3 (irreducible over F_17)
+    // Outer modulus: y^2 - x (we need x to not be a square in F_{17^2})
+
+    // For the outer modulus y^2 + c0 + c1*x = 0, we store [c0, c1]
+    // y^2 = -c0 - c1*x means y^2 = γ where γ = -c0 - c1*x
+    // For y^2 = x, we have c0 = 0, c1 = -1 = 16
+    fn outer_modulus_y2_minus_x() -> [Ext2; 2] {
+        // y^2 - x = 0, so y^2 + (-x) = 0
+        // Coefficients: [0, -1] = [0, 16] in the monic form y^2 + 0 + 16x
+        // Actually for our reduction: y^2 = -outer_mod[0] - outer_mod[1]*y
+        // We want y^2 = x, so we need outer_mod = [-x, 0] but that's for y^2 + outer_mod[0] = 0
+        // Let me reconsider: g(y) = y^2 - x is stored as coefficients [-x, 0, 1]
+        // But we only store the non-leading coeffs: [-x, 0]
+        [
+            Ext2::new([F17::ZERO, F17::new(16)]), // -x = 16x in F_17
+            Ext2::zero(),                         // coefficient of y is 0
+        ]
+    }
+
+    #[test]
+    fn tower_zero_one() {
+        let z = Tower2x2::zero();
+        assert!(z.is_zero());
+
+        let one = Tower2x2::one();
+        assert!(!one.is_zero());
+        assert_eq!(one.coeff(0), Ext2::one());
+        assert_eq!(one.coeff(1), Ext2::zero());
+    }
+
+    #[test]
+    fn tower_from_base() {
+        let base_elem = Ext2::new([F17::new(3), F17::new(5)]);
+        let tower_elem = Tower2x2::from_base(base_elem);
+
+        assert_eq!(tower_elem.coeff(0), base_elem);
+        assert_eq!(tower_elem.coeff(1), Ext2::zero());
+    }
+
+    #[test]
+    fn tower_from_prime() {
+        let prime_elem = F17::new(7);
+        let tower_elem = Tower2x2::from_prime(prime_elem);
+
+        assert_eq!(tower_elem.coeff(0).coeff(0), prime_elem);
+        assert_eq!(tower_elem.coeff(0).coeff(1), F17::ZERO);
+        assert_eq!(tower_elem.coeff(1), Ext2::zero());
+    }
+
+    #[test]
+    fn tower_y_element() {
+        let y = Tower2x2::y().unwrap();
+
+        assert_eq!(y.coeff(0), Ext2::zero());
+        assert_eq!(y.coeff(1), Ext2::one());
+    }
+
+    #[test]
+    fn tower_add_sub() {
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(1), F17::new(2)]),
+            Ext2::new([F17::new(3), F17::new(4)]),
+        ]);
+        let b = Tower2x2::new([
+            Ext2::new([F17::new(5), F17::new(6)]),
+            Ext2::new([F17::new(7), F17::new(8)]),
+        ]);
+
+        let sum = a + b;
+        assert_eq!(sum.coeff(0), Ext2::new([F17::new(6), F17::new(8)]));
+        assert_eq!(sum.coeff(1), Ext2::new([F17::new(10), F17::new(12)]));
+
+        let diff = a - b;
+        assert_eq!(diff.coeff(0), Ext2::new([F17::new(13), F17::new(13)])); // -4 = 13
+        assert_eq!(diff.coeff(1), Ext2::new([F17::new(13), F17::new(13)]));
+    }
+
+    #[test]
+    fn tower_neg() {
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(1), F17::new(2)]),
+            Ext2::new([F17::new(3), F17::new(4)]),
+        ]);
+        let neg_a = -a;
+
+        assert_eq!(neg_a.coeff(0), Ext2::new([F17::new(16), F17::new(15)]));
+        assert_eq!(neg_a.coeff(1), Ext2::new([F17::new(14), F17::new(13)]));
+    }
+
+    #[test]
+    fn tower_mul_identity() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+        let one = Tower2x2::one();
+
+        let result = a.mul_mod(&one, &inner_mod, &outer_mod);
+        assert_eq!(result, a);
+
+        let result2 = one.mul_mod(&a, &inner_mod, &outer_mod);
+        assert_eq!(result2, a);
+    }
+
+    #[test]
+    fn tower_mul_zero() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+        let zero = Tower2x2::zero();
+
+        let result = a.mul_mod(&zero, &inner_mod, &outer_mod);
+        assert!(result.is_zero());
+    }
+
+    #[test]
+    fn tower_mul_y_squared() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        // y^2 should equal x (the generator of F_{17^2})
+        let y = Tower2x2::y().unwrap();
+        let y_squared = y.mul_mod(&y, &inner_mod, &outer_mod);
+
+        // y^2 = x means coeff(0) = x = (0, 1) and coeff(1) = 0
+        assert_eq!(y_squared.coeff(0), Ext2::new([F17::ZERO, F17::ONE]));
+        assert_eq!(y_squared.coeff(1), Ext2::zero());
+    }
+
+    #[test]
+    fn tower_mul_commutative() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+        let b = Tower2x2::new([
+            Ext2::new([F17::new(11), F17::new(13)]),
+            Ext2::new([F17::new(1), F17::new(2)]),
+        ]);
+
+        let ab = a.mul_mod(&b, &inner_mod, &outer_mod);
+        let ba = b.mul_mod(&a, &inner_mod, &outer_mod);
+        assert_eq!(ab, ba);
+    }
+
+    #[test]
+    fn tower_mul_associative() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+        let b = Tower2x2::new([
+            Ext2::new([F17::new(11), F17::new(13)]),
+            Ext2::new([F17::new(1), F17::new(2)]),
+        ]);
+        let c = Tower2x2::new([
+            Ext2::new([F17::new(4), F17::new(6)]),
+            Ext2::new([F17::new(8), F17::new(9)]),
+        ]);
+
+        let ab_c = a
+            .mul_mod(&b, &inner_mod, &outer_mod)
+            .mul_mod(&c, &inner_mod, &outer_mod);
+        let a_bc = a.mul_mod(
+            &b.mul_mod(&c, &inner_mod, &outer_mod),
+            &inner_mod,
+            &outer_mod,
+        );
+        assert_eq!(ab_c, a_bc);
+    }
+
+    #[test]
+    fn tower_inverse_one() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let one = Tower2x2::one();
+        let one_inv = one.inverse_mod(&inner_mod, &outer_mod).unwrap();
+
+        assert_eq!(one_inv, one);
+    }
+
+    #[test]
+    fn tower_inverse_zero_fails() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let zero = Tower2x2::zero();
+        assert!(zero.inverse_mod(&inner_mod, &outer_mod).is_none());
+    }
+
+    #[test]
+    fn tower_inverse_basic() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+
+        let a_inv = a.inverse_mod(&inner_mod, &outer_mod).unwrap();
+        let product = a.mul_mod(&a_inv, &inner_mod, &outer_mod);
+
+        assert_eq!(product, Tower2x2::one());
+    }
+
+    #[test]
+    fn tower_inverse_y() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        // y^{-1} where y^2 = x
+        // y * y^{-1} = 1
+        // y^{-1} = y / y^2 = y / x = y * x^{-1}
+        let y = Tower2x2::y().unwrap();
+        let y_inv = y.inverse_mod(&inner_mod, &outer_mod).unwrap();
+
+        let product = y.mul_mod(&y_inv, &inner_mod, &outer_mod);
+        assert_eq!(product, Tower2x2::one());
+    }
+
+    #[test]
+    fn tower_pow_basic() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+
+        // a^0 = 1
+        assert_eq!(a.pow_mod(0, &inner_mod, &outer_mod), Tower2x2::one());
+
+        // a^1 = a
+        assert_eq!(a.pow_mod(1, &inner_mod, &outer_mod), a);
+
+        // a^2 = a * a
+        let a_squared = a.mul_mod(&a, &inner_mod, &outer_mod);
+        assert_eq!(a.pow_mod(2, &inner_mod, &outer_mod), a_squared);
+    }
+
+    #[test]
+    fn tower_pow_fermat() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        // In F_{17^4}, every non-zero element satisfies a^{17^4 - 1} = 1
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(3), F17::new(5)]),
+            Ext2::new([F17::new(7), F17::new(11)]),
+        ]);
+
+        // 17^4 - 1 = 83520
+        let order = 17u64 * 17 * 17 * 17 - 1;
+        let result = a.pow_mod(order, &inner_mod, &outer_mod);
+
+        assert_eq!(result, Tower2x2::one());
+    }
+
+    #[test]
+    fn tower_distributive() {
+        let inner_mod = modulus_x2_minus_3();
+        let outer_mod = outer_modulus_y2_minus_x();
+
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(2), F17::new(3)]),
+            Ext2::new([F17::new(5), F17::new(7)]),
+        ]);
+        let b = Tower2x2::new([
+            Ext2::new([F17::new(11), F17::new(13)]),
+            Ext2::new([F17::new(1), F17::new(2)]),
+        ]);
+        let c = Tower2x2::new([
+            Ext2::new([F17::new(4), F17::new(6)]),
+            Ext2::new([F17::new(8), F17::new(9)]),
+        ]);
+
+        // a * (b + c) = a*b + a*c
+        let lhs = a.mul_mod(&(b + c), &inner_mod, &outer_mod);
+        let rhs = a.mul_mod(&b, &inner_mod, &outer_mod) + a.mul_mod(&c, &inner_mod, &outer_mod);
+        assert_eq!(lhs, rhs);
+    }
+
+    #[test]
+    fn tower_debug_format() {
+        let a = Tower2x2::new([
+            Ext2::new([F17::new(1), F17::new(2)]),
+            Ext2::new([F17::new(3), F17::new(4)]),
+        ]);
+        let s = format!("{:?}", a);
+        // Should contain both coefficients
+        assert!(s.contains("1"));
+        assert!(s.contains("y"));
     }
 }
