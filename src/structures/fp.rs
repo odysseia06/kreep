@@ -483,6 +483,12 @@ impl<const P: u64> fmt::Debug for Fp<P> {
     }
 }
 
+impl<const P: u64> fmt::Display for Fp<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value())
+    }
+}
+
 /* ---- standard arithmetic operators ---- */
 
 impl<const P: u64> Add for Fp<P> {
