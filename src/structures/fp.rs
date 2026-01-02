@@ -101,6 +101,22 @@ impl<const P: u64> rand::distributions::Distribution<Fp<P>> for rand::distributi
     }
 }
 
+#[cfg(feature = "subtle")]
+impl<const P: u64> subtle::ConstantTimeEq for Fp<P> {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.mont.ct_eq(&other.mont)
+    }
+}
+
+#[cfg(feature = "subtle")]
+impl<const P: u64> subtle::ConditionallySelectable for Fp<P> {
+    fn conditional_select(a: &Self, b: &Self, choice: subtle::Choice) -> Self {
+        Self {
+            mont: u64::conditional_select(&a.mont, &b.mont, choice),
+        }
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<const P: u64> serde::Serialize for Fp<P> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -236,6 +252,80 @@ impl<const P: u64> Fp<P> {
         } else {
             let inv = self.inverse()?;
             Some(inv.pow((-exp) as u64))
+        }
+    }
+
+    /// Constant-time exponentiation using square-and-multiply.
+    ///
+    /// Always performs exactly 64 iterations regardless of the exponent value.
+    /// Uses conditional selection to avoid timing side channels.
+    ///
+    /// Requires the `subtle` feature.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let a = F17::new(3);
+    /// assert_eq!(a.pow_ct(2), a * a);
+    /// assert_eq!(a.pow_ct(16), F17::ONE);  // Fermat: a^(p-1) = 1
+    /// ```
+    #[cfg(feature = "subtle")]
+    pub fn pow_ct(self, exp: u64) -> Self {
+        use subtle::{Choice, ConditionallySelectable};
+
+        let mut base = self;
+        let mut result = Self::ONE;
+
+        for i in 0..64 {
+            let bit = Choice::from(((exp >> i) & 1) as u8);
+            result = Self::conditional_select(&result, &(result * base), bit);
+            base = base * base;
+        }
+        result
+    }
+
+    /// Constant-time multiplicative inverse using Fermat's little theorem.
+    ///
+    /// Computes `a^(p-2) mod p` which equals `a^(-1)` for non-zero `a`.
+    /// Returns `None` for zero (checked in constant time).
+    ///
+    /// This is slower than the extended Euclidean algorithm but runs in
+    /// constant time, making it suitable for cryptographic applications.
+    ///
+    /// Requires the `subtle` feature.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let a = F17::new(3);
+    /// let a_inv = a.inverse_ct().unwrap();
+    /// assert_eq!(a * a_inv, F17::ONE);
+    ///
+    /// assert!(F17::ZERO.inverse_ct().is_none());
+    /// ```
+    #[cfg(feature = "subtle")]
+    pub fn inverse_ct(self) -> Option<Self> {
+        use subtle::ConstantTimeEq;
+
+        // Check for zero in constant time
+        let is_zero = self.mont.ct_eq(&0u64);
+
+        // Compute a^(p-2) mod p using constant-time exponentiation
+        let result = self.pow_ct(P - 2);
+
+        // Return None if input was zero
+        if bool::from(is_zero) {
+            None
+        } else {
+            Some(result)
         }
     }
 
@@ -1111,6 +1201,101 @@ mod rand_tests {
                 a = rng.gen();
             }
             assert_ne!(a, F17::ZERO);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "subtle"))]
+mod subtle_tests {
+    use super::*;
+    use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
+
+    type F17 = Fp<17>;
+
+    #[test]
+    fn ct_eq_equal() {
+        let a = F17::new(5);
+        let b = F17::new(5);
+        assert!(bool::from(a.ct_eq(&b)));
+    }
+
+    #[test]
+    fn ct_eq_not_equal() {
+        let a = F17::new(5);
+        let b = F17::new(7);
+        assert!(!bool::from(a.ct_eq(&b)));
+    }
+
+    #[test]
+    fn conditional_select_false() {
+        let a = F17::new(5);
+        let b = F17::new(7);
+        let result = F17::conditional_select(&a, &b, Choice::from(0));
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn conditional_select_true() {
+        let a = F17::new(5);
+        let b = F17::new(7);
+        let result = F17::conditional_select(&a, &b, Choice::from(1));
+        assert_eq!(result, b);
+    }
+
+    #[test]
+    fn pow_ct_basic() {
+        let a = F17::new(3);
+        assert_eq!(a.pow_ct(0), F17::ONE);
+        assert_eq!(a.pow_ct(1), a);
+        assert_eq!(a.pow_ct(2), a * a);
+        assert_eq!(a.pow_ct(3), a * a * a);
+    }
+
+    #[test]
+    fn pow_ct_matches_pow() {
+        for base in 0u64..17 {
+            let a = F17::new(base);
+            for exp in 0u64..20 {
+                assert_eq!(
+                    a.pow_ct(exp),
+                    a.pow(exp),
+                    "pow_ct({}, {}) mismatch",
+                    base,
+                    exp
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pow_ct_fermat() {
+        // a^(p-1) = 1 for all nonzero a
+        for x in 1u64..17 {
+            let a = F17::new(x);
+            assert_eq!(a.pow_ct(16), F17::ONE);
+        }
+    }
+
+    #[test]
+    fn inverse_ct_basic() {
+        for x in 1u64..17 {
+            let a = F17::new(x);
+            let inv = a.inverse_ct().unwrap();
+            assert_eq!(a * inv, F17::ONE, "inverse_ct({}) failed", x);
+        }
+    }
+
+    #[test]
+    fn inverse_ct_zero() {
+        assert!(F17::ZERO.inverse_ct().is_none());
+    }
+
+    #[test]
+    fn inverse_ct_matches_inverse() {
+        use crate::algebra::field::Field;
+        for x in 1u64..17 {
+            let a = F17::new(x);
+            assert_eq!(a.inverse_ct(), a.inverse());
         }
     }
 }
