@@ -148,6 +148,120 @@ impl<const P: u64> Fp<P> {
         }
         Ok(())
     }
+
+    /// Batch inversion using Montgomery's trick.
+    ///
+    /// Computes the multiplicative inverse of each element in the slice
+    /// using only one field inversion plus 3(n-1) multiplications.
+    ///
+    /// Returns `None` if any element is zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Field, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let elements = vec![F17::new(2), F17::new(3), F17::new(5)];
+    /// let inverses = F17::batch_inverse(&elements).unwrap();
+    ///
+    /// for (a, a_inv) in elements.iter().zip(inverses.iter()) {
+    ///     assert_eq!(*a * *a_inv, F17::ONE);
+    /// }
+    /// ```
+    pub fn batch_inverse(elements: &[Self]) -> Option<Vec<Self>> {
+        let n = elements.len();
+        if n == 0 {
+            return Some(Vec::new());
+        }
+
+        // Check for zeros and compute partial products
+        let mut partials = Vec::with_capacity(n);
+        let mut acc = Self::ONE;
+
+        for &elem in elements {
+            if elem.mont == 0 {
+                return None;
+            }
+            partials.push(acc);
+            acc = acc * elem;
+        }
+
+        // Invert the accumulated product
+        let mut acc_inv = acc.inverse()?;
+
+        // Work backwards to compute individual inverses
+        let mut result = vec![Self::ZERO; n];
+        for i in (0..n).rev() {
+            result[i] = acc_inv * partials[i];
+            acc_inv = acc_inv * elements[i];
+        }
+
+        Some(result)
+    }
+
+    /// In-place batch inversion using Montgomery's trick.
+    ///
+    /// Replaces each element with its multiplicative inverse using only
+    /// one field inversion plus 3(n-1) multiplications.
+    ///
+    /// Returns `false` if any element is zero (slice unchanged).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Field, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// let mut elements = [F17::new(2), F17::new(3), F17::new(5)];
+    /// let originals = elements.clone();
+    ///
+    /// assert!(F17::batch_inverse_in_place(&mut elements));
+    ///
+    /// for (a, a_inv) in originals.iter().zip(elements.iter()) {
+    ///     assert_eq!(*a * *a_inv, F17::ONE);
+    /// }
+    /// ```
+    pub fn batch_inverse_in_place(elements: &mut [Self]) -> bool {
+        let n = elements.len();
+        if n == 0 {
+            return true;
+        }
+
+        // Check for zeros first
+        for elem in elements.iter() {
+            if elem.mont == 0 {
+                return false;
+            }
+        }
+
+        // Compute partial products in-place
+        // partials[i] = elements[0] * ... * elements[i-1]
+        let mut partials = Vec::with_capacity(n);
+        let mut acc = Self::ONE;
+
+        for &elem in elements.iter() {
+            partials.push(acc);
+            acc = acc * elem;
+        }
+
+        // Invert the accumulated product
+        let mut acc_inv = match acc.inverse() {
+            Some(inv) => inv,
+            None => return false,
+        };
+
+        // Work backwards to compute individual inverses
+        for i in (0..n).rev() {
+            let orig = elements[i];
+            elements[i] = acc_inv * partials[i];
+            acc_inv = acc_inv * orig;
+        }
+
+        true
+    }
 }
 
 impl<const P: u64> fmt::Debug for Fp<P> {
@@ -366,5 +480,74 @@ mod tests {
         let b = F101::new(60);
         assert_eq!((a + b).value(), 9); // 50 + 60 = 110 ≡ 9 (mod 101)
         assert_eq!((a * b).value(), (3000 % 101) as u64);
+    }
+
+    #[test]
+    fn batch_inverse_basic() {
+        let elements: Vec<F17> = (1u64..17).map(F17::new).collect();
+        let inverses = F17::batch_inverse(&elements).unwrap();
+
+        assert_eq!(elements.len(), inverses.len());
+        for (a, a_inv) in elements.iter().zip(inverses.iter()) {
+            assert_eq!(*a * *a_inv, F17::ONE);
+        }
+    }
+
+    #[test]
+    fn batch_inverse_empty() {
+        let elements: Vec<F17> = vec![];
+        let inverses = F17::batch_inverse(&elements).unwrap();
+        assert!(inverses.is_empty());
+    }
+
+    #[test]
+    fn batch_inverse_single() {
+        let elements = vec![F17::new(5)];
+        let inverses = F17::batch_inverse(&elements).unwrap();
+        assert_eq!(inverses.len(), 1);
+        assert_eq!(elements[0] * inverses[0], F17::ONE);
+    }
+
+    #[test]
+    fn batch_inverse_with_zero_fails() {
+        let elements = vec![F17::new(3), F17::ZERO, F17::new(5)];
+        assert!(F17::batch_inverse(&elements).is_none());
+    }
+
+    #[test]
+    fn batch_inverse_in_place_basic() {
+        let originals: Vec<F17> = (1u64..17).map(F17::new).collect();
+        let mut elements = originals.clone();
+
+        assert!(F17::batch_inverse_in_place(&mut elements));
+
+        for (a, a_inv) in originals.iter().zip(elements.iter()) {
+            assert_eq!(*a * *a_inv, F17::ONE);
+        }
+    }
+
+    #[test]
+    fn batch_inverse_in_place_empty() {
+        let mut elements: [F17; 0] = [];
+        assert!(F17::batch_inverse_in_place(&mut elements));
+    }
+
+    #[test]
+    fn batch_inverse_in_place_with_zero_fails() {
+        let mut elements = [F17::new(3), F17::ZERO, F17::new(5)];
+        let original = elements.clone();
+
+        assert!(!F17::batch_inverse_in_place(&mut elements));
+        // Elements should be unchanged
+        assert_eq!(elements, original);
+    }
+
+    #[test]
+    fn batch_inverse_matches_individual() {
+        let elements: Vec<F17> = vec![F17::new(2), F17::new(7), F17::new(11)];
+        let batch_inv = F17::batch_inverse(&elements).unwrap();
+        let individual_inv: Vec<F17> = elements.iter().map(|x| x.inverse().unwrap()).collect();
+
+        assert_eq!(batch_inv, individual_inv);
     }
 }
