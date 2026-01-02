@@ -1,4 +1,4 @@
-use kreep::{Field, Fp, Ring};
+use kreep::{Field, Fp};
 
 type F17 = Fp<17>;
 
