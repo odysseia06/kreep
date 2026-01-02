@@ -1,6 +1,8 @@
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
+#[cfg(feature = "rand")]
+use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
 use crate::structures::fp::Fp;
 
@@ -1071,6 +1073,7 @@ impl<const P: u64> Poly<P> {
     }
 
     /// Compute (p^d - 1) / 2.
+    #[cfg(feature = "rand")]
     fn compute_half_order(d: usize) -> u64 {
         let mut result: u64 = 1;
         for _ in 0..d {
