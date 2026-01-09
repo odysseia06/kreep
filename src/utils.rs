@@ -1,3 +1,36 @@
+/// Compute ceil(sqrt(n)) using integer arithmetic only.
+///
+/// Uses Newton's method (Heron's method) for integer square root,
+/// then adjusts to get the ceiling. This avoids f64 precision loss
+/// for large values of n.
+pub const fn ceil_sqrt_u64(n: u64) -> u64 {
+    if n <= 1 {
+        return n;
+    }
+
+    // Newton's method for floor(sqrt(n))
+    // Initial guess: use bit manipulation to get close to sqrt
+    // For n with k bits, sqrt(n) has about k/2 bits
+    let mut x = 1u64 << ((64 - n.leading_zeros() + 1) / 2);
+
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x {
+            break;
+        }
+        x = y;
+    }
+    // x is now floor(sqrt(n))
+
+    // Return ceil: check if x*x == n without overflow
+    // x*x == n iff n / x == x && n % x == 0
+    if n / x == x && n % x == 0 {
+        x
+    } else {
+        x + 1
+    }
+}
+
 /// Compute the greatest common divisor of two numbers.
 ///
 /// Uses the Euclidean algorithm.
@@ -25,7 +58,7 @@ pub const fn is_prime(n: u64) -> bool {
     }
 
     let mut i = 3;
-    while i * i <= n {
+    while i <= n / i {
         if n.is_multiple_of(i) {
             return false;
         }
@@ -83,5 +116,50 @@ mod tests {
         assert_eq!(gcd(7, 0), 7);
         assert_eq!(gcd(0, 5), 5);
         assert_eq!(gcd(48, 18), 6);
+    }
+
+    #[test]
+    fn ceil_sqrt_small() {
+        assert_eq!(ceil_sqrt_u64(0), 0);
+        assert_eq!(ceil_sqrt_u64(1), 1);
+        assert_eq!(ceil_sqrt_u64(2), 2);
+        assert_eq!(ceil_sqrt_u64(3), 2);
+        assert_eq!(ceil_sqrt_u64(4), 2);
+        assert_eq!(ceil_sqrt_u64(5), 3);
+        assert_eq!(ceil_sqrt_u64(8), 3);
+        assert_eq!(ceil_sqrt_u64(9), 3);
+        assert_eq!(ceil_sqrt_u64(10), 4);
+    }
+
+    #[test]
+    fn ceil_sqrt_perfect_squares() {
+        assert_eq!(ceil_sqrt_u64(16), 4);
+        assert_eq!(ceil_sqrt_u64(25), 5);
+        assert_eq!(ceil_sqrt_u64(100), 10);
+        assert_eq!(ceil_sqrt_u64(10000), 100);
+        assert_eq!(ceil_sqrt_u64(1_000_000), 1000);
+    }
+
+    #[test]
+    fn ceil_sqrt_non_perfect() {
+        assert_eq!(ceil_sqrt_u64(17), 5);
+        assert_eq!(ceil_sqrt_u64(99), 10);
+        assert_eq!(ceil_sqrt_u64(101), 11);
+    }
+
+    #[test]
+    fn ceil_sqrt_large() {
+        // Test values near u64::MAX where f64 loses precision
+        let large = (1u64 << 62) - 1;
+        let result = ceil_sqrt_u64(large);
+        // result should satisfy: (result-1)^2 < large <= result^2
+        assert!(result > 0);
+        assert!((result - 1).saturating_mul(result - 1) < large);
+        // Can't check result^2 directly due to overflow, but verify it's close
+        assert_eq!(result, 2147483648); // 2^31
+
+        // Test u64::MAX
+        let max_sqrt = ceil_sqrt_u64(u64::MAX);
+        assert_eq!(max_sqrt, 1u64 << 32); // ceil(sqrt(2^64 - 1)) = 2^32
     }
 }

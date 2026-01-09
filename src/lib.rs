@@ -12,4 +12,4 @@ pub use structures::fp::Fp;
 pub use structures::gf;
 pub use structures::ntt;
 pub use structures::poly::Poly;
-pub use utils::{gcd, is_prime};
+pub use utils::{ceil_sqrt_u64, gcd, is_prime};

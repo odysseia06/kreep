@@ -104,7 +104,7 @@ fn prime_factors(mut n: u64) -> Vec<u64> {
     let mut factors = Vec::new();
 
     let mut d = 2;
-    while d * d <= n {
+    while d <= n / d {
         if n.is_multiple_of(d) {
             factors.push(d);
             while n.is_multiple_of(d) {
@@ -475,10 +475,10 @@ mod tests {
 
     #[test]
     fn prime_factors_test() {
-        assert_eq!(prime_factors(12), vec![2, 3]);
-        assert_eq!(prime_factors(100), vec![2, 5]);
-        assert_eq!(prime_factors(17), vec![17]);
-        assert_eq!(prime_factors(1), vec![]);
-        assert_eq!(prime_factors(2), vec![2]);
+        assert_eq!(prime_factors(12), vec![2u64, 3]);
+        assert_eq!(prime_factors(100), vec![2u64, 5]);
+        assert_eq!(prime_factors(17), vec![17u64]);
+        assert_eq!(prime_factors(1), Vec::<u64>::new());
+        assert_eq!(prime_factors(2), vec![2u64]);
     }
 }

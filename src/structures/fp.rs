@@ -662,13 +662,14 @@ impl<const P: u64> Fp<P> {
         // Giant step: compute self * (base^(-m))^i for i = 0, 1, ..., m-1
         // Find collision
 
-        let m = (order as f64).sqrt().ceil() as u64;
+        let m = crate::utils::ceil_sqrt_u64(order);
 
         // Baby step: build table of (base^j, j) for j = 0..m
+        // Use or_insert to keep the smallest j on collisions (when base has small order)
         let mut table = std::collections::HashMap::with_capacity(m as usize);
         let mut power = Self::ONE;
         for j in 0..m {
-            table.insert(power.value(), j);
+            table.entry(power.value()).or_insert(j);
             power = power * base;
         }
 
@@ -1470,6 +1471,67 @@ mod tests {
             let result = target.discrete_log(g);
             assert_eq!(result, Some(x));
         }
+    }
+
+    #[test]
+    fn discrete_log_non_primitive_base_collision() {
+        // Regression test: BSGS with non-primitive base that causes baby-step collisions.
+        // Base with small order means base^j cycles, causing hash table overwrites.
+        // The fix (using or_insert) ensures we keep the smallest j.
+
+        // 2 has order 8 in F17 (not 16), so base^8 = 1 and values repeat
+        let base = F17::new(2);
+        assert_eq!(base.multiplicative_order(), Some(8));
+
+        // Test all elements in <2> = {1, 2, 4, 8, 16, 15, 13, 9}
+        for x in 0u64..8 {
+            let target = base.pow(x);
+            let result = target.discrete_log_with_order(base, 8);
+            assert_eq!(
+                result,
+                Some(x),
+                "discrete_log of {}^{} should be {}",
+                base.value(),
+                x,
+                x
+            );
+        }
+
+        // Specifically test that we get the SMALLEST exponent
+        // base^0 = 1, and with order 8, base^8 = 1 too
+        // We must get 0, not 8
+        let one = F17::ONE;
+        assert_eq!(one.discrete_log_with_order(base, 8), Some(0));
+
+        // base^1 = 2, base^9 = 2 (since 9 mod 8 = 1)
+        // We must get 1
+        assert_eq!(base.discrete_log_with_order(base, 8), Some(1));
+    }
+
+    #[test]
+    fn discrete_log_large_order() {
+        // Test with a larger prime to exercise ceil_sqrt_u64 with bigger values
+        type F65537 = Fp<65537>; // Fermat prime F4
+
+        let g = F65537::primitive_root().unwrap();
+
+        // Test several exponents including large ones
+        for x in [0, 1, 100, 1000, 32768, 65535] {
+            let target = g.pow(x);
+            let result = target.discrete_log(g);
+            assert_eq!(result, Some(x), "discrete_log failed for exponent {}", x);
+        }
+    }
+
+    #[test]
+    fn discrete_log_very_small_order() {
+        // Edge case: base = -1 has order 2
+        let base = F17::new(16); // -1 mod 17
+        assert_eq!(base.multiplicative_order(), Some(2));
+
+        // Only two elements in <-1>: {1, -1}
+        assert_eq!(F17::ONE.discrete_log_with_order(base, 2), Some(0));
+        assert_eq!(base.discrete_log_with_order(base, 2), Some(1));
     }
 }
 

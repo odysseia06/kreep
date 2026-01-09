@@ -537,7 +537,7 @@ impl<const P: u64> Poly<P> {
         let mut primes = Vec::new();
         let mut d = 2;
 
-        while d * d <= n {
+        while d <= n / d {
             if n.is_multiple_of(d) {
                 primes.push(d);
                 while n.is_multiple_of(d) {
@@ -651,7 +651,7 @@ impl<const P: u64> Poly<P> {
         let mut primes = Vec::new();
         let mut d: u64 = 2;
 
-        while d.saturating_mul(d) <= n {
+        while d <= n / d {
             if n.is_multiple_of(d) {
                 primes.push(d);
                 while n.is_multiple_of(d) {
@@ -2304,14 +2304,14 @@ mod tests {
 
     #[test]
     fn prime_divisors_basic() {
-        assert_eq!(P17::prime_divisors(1), vec![]);
-        assert_eq!(P17::prime_divisors(2), vec![2]);
-        assert_eq!(P17::prime_divisors(3), vec![3]);
-        assert_eq!(P17::prime_divisors(4), vec![2]);
-        assert_eq!(P17::prime_divisors(6), vec![2, 3]);
-        assert_eq!(P17::prime_divisors(12), vec![2, 3]);
-        assert_eq!(P17::prime_divisors(30), vec![2, 3, 5]);
-        assert_eq!(P17::prime_divisors(17), vec![17]);
+        assert_eq!(P17::prime_divisors(1), Vec::<usize>::new());
+        assert_eq!(P17::prime_divisors(2), vec![2usize]);
+        assert_eq!(P17::prime_divisors(3), vec![3usize]);
+        assert_eq!(P17::prime_divisors(4), vec![2usize]);
+        assert_eq!(P17::prime_divisors(6), vec![2usize, 3]);
+        assert_eq!(P17::prime_divisors(12), vec![2usize, 3]);
+        assert_eq!(P17::prime_divisors(30), vec![2usize, 3, 5]);
+        assert_eq!(P17::prime_divisors(17), vec![17usize]);
     }
 
     #[test]
@@ -2441,11 +2441,11 @@ mod tests {
 
     #[test]
     fn prime_divisors_u64_basic() {
-        assert_eq!(P17::prime_divisors_u64(1), vec![]);
-        assert_eq!(P17::prime_divisors_u64(2), vec![2]);
-        assert_eq!(P17::prime_divisors_u64(15), vec![3, 5]);
-        assert_eq!(P17::prime_divisors_u64(288), vec![2, 3]); // 2^5 * 3^2
-        assert_eq!(P17::prime_divisors_u64(17), vec![17]);
+        assert_eq!(P17::prime_divisors_u64(1), Vec::<u64>::new());
+        assert_eq!(P17::prime_divisors_u64(2), vec![2u64]);
+        assert_eq!(P17::prime_divisors_u64(15), vec![3u64, 5]);
+        assert_eq!(P17::prime_divisors_u64(288), vec![2u64, 3]); // 2^5 * 3^2
+        assert_eq!(P17::prime_divisors_u64(17), vec![17u64]);
     }
 
     #[test]

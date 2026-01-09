@@ -189,8 +189,11 @@ impl<const P: u64, const D: usize> GF<P, D> {
     }
 
     /// Assert that two elements share the same modulus.
+    ///
+    /// Panics if the moduli differ. This check runs in both debug and release builds
+    /// to prevent silent cross-field mixing.
     fn assert_same_modulus(&self, other: &Self) {
-        debug_assert!(
+        assert!(
             Rc::ptr_eq(&self.modulus, &other.modulus) || *self.modulus == *other.modulus,
             "GF elements must have the same modulus"
         );
@@ -319,7 +322,9 @@ impl<const P: u64, const D: usize> Div for &GF<P, D> {
 
 impl<const P: u64, const D: usize> PartialEq for GF<P, D> {
     fn eq(&self, other: &Self) -> bool {
-        self.elem == other.elem
+        // Two elements are equal only if they have the same modulus and same coefficients
+        (Rc::ptr_eq(&self.modulus, &other.modulus) || *self.modulus == *other.modulus)
+            && self.elem == other.elem
     }
 }
 
