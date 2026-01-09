@@ -1,12 +1,16 @@
 //! Serde serialization/deserialization tests
 //!
 //! Run with: cargo test --features serde --test serde_tests
+//!
+//! These integration tests verify serde roundtrips work correctly across
+//! the public API. Unit tests in src/structures/* cover more detailed cases.
 
-#![cfg(feature = "serde")]
+#![cfg(all(feature = "serde", feature = "std"))]
+
+use std::rc::Rc;
 
 use kreep::gf::{irreducible_poly_deg2, GFWithModulus, Modulus, GF};
 use kreep::{ExtField, Fp, Poly};
-use std::rc::Rc;
 
 type F17 = Fp<17>;
 

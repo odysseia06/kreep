@@ -7,7 +7,7 @@ edition = "2021"
 default = ["std"]
 std = ["alloc"]
 alloc = []
-serde = ["dep:serde"]
+serde = ["dep:serde", "alloc"]
 rand = ["dep:rand"]
 subtle = ["dep:subtle"]
 
