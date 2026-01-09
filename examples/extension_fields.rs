@@ -154,16 +154,20 @@ fn frobenius_norm_trace() {
     let norm = a.norm();
     println!("  Norm(a) = {} (in base field F_17)", norm);
 
-    // Verify: norm = a * a^p
+    // Verify: norm = a * a^p, and the result should be in the base field
     let norm_check = &a * &a_frob;
+    let norm_as_gf = GF17_2::from_base(norm, modulus.clone());
     println!("  Verify: a * Frobenius(a) = {}", norm_check);
+    println!("  Matches Norm(a)? {}", norm_check == norm_as_gf);
     println!();
 
     // Trace: sum of conjugates = a + Frobenius(a)
     let trace = a.trace();
     println!("  Trace(a) = {} (in base field F_17)", trace);
 
-    // Verify: trace = a + a^p (coefficient of x^0)
+    // Verify: trace = a + a^p, and the result should be in the base field
     let trace_check = &a + &a_frob;
+    let trace_as_gf = GF17_2::from_base(trace, modulus.clone());
     println!("  Verify: a + Frobenius(a) = {}", trace_check);
+    println!("  Matches Trace(a)? {}", trace_check == trace_as_gf);
 }

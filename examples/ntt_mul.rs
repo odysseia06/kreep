@@ -35,9 +35,16 @@ fn ntt_friendly_primes() {
     // Check our prime
     let info = ntt::ntt_info::<NTT_PRIME>().unwrap();
     println!("Prime: {} = 119 * 2^23 + 1", NTT_PRIME);
-    println!("  max_log2: {} (supports NTT up to size 2^{} = {})",
-             info.max_log2, info.max_log2, 1u64 << info.max_log2);
-    println!("  primitive 2^{}-th root of unity: {}", info.max_log2, info.primitive_root);
+    println!(
+        "  max_log2: {} (supports NTT up to size 2^{} = {})",
+        info.max_log2,
+        info.max_log2,
+        1u64 << info.max_log2
+    );
+    println!(
+        "  primitive 2^{}-th root of unity: {}",
+        info.max_log2, info.primitive_root
+    );
     println!();
 
     // Other common NTT primes
@@ -51,10 +58,19 @@ fn ntt_friendly_primes() {
         println!("  2281701377 = 17 * 2^27 + 1, max size 2^{}", info.max_log2);
     }
 
-    // A non-NTT-friendly prime
-    println!("\nNon-NTT-friendly example:");
+    // Primes with limited NTT support
+    println!("\nPrimes with limited NTT support:");
     if let Some(info) = ntt::ntt_info::<17>() {
-        println!("  17: max_log2 = {} (only supports small NTT)", info.max_log2);
+        println!(
+            "  17: 17-1 = 16 = 2^4, max_log2 = {} (max NTT size 16)",
+            info.max_log2
+        );
+    }
+    if let Some(info) = ntt::ntt_info::<19>() {
+        println!(
+            "  19: 19-1 = 18 = 2*9, max_log2 = {} (max NTT size 2)",
+            info.max_log2
+        );
     }
     println!();
 }
@@ -126,7 +142,10 @@ fn compare_with_naive() {
 
     println!("Complexity comparison:");
     println!("  Naive: O(n^2) = O({}) operations", degree * degree);
-    println!("  NTT:   O(n log n) ≈ O({}) operations", degree * (degree as f64).log2() as u64);
+    println!(
+        "  NTT:   O(n log n) ≈ O({}) operations",
+        degree * (degree as f64).log2() as u64
+    );
     println!();
 }
 
@@ -153,7 +172,11 @@ fn roots_of_unity() {
     // Verify key properties
     println!("Verification:");
     println!("  ω^8 = {} (should be 1)", omega.pow(8));
-    println!("  ω^4 = {} (should be -1 = {})", omega.pow(4), F::new(NTT_PRIME - 1));
+    println!(
+        "  ω^4 = {} (should be -1 = {})",
+        omega.pow(4),
+        F::new(NTT_PRIME - 1)
+    );
 
     // ω^k ≠ 1 for 0 < k < 8
     let mut primitive = true;
