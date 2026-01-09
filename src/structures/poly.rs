@@ -650,7 +650,7 @@ impl<const P: u64> Poly<P> {
     ///
     /// A polynomial f(x) of degree n is primitive if:
     /// 1. It is irreducible
-    /// 2. x is a primitive element of F_p[x]/(f(x)), i.e., ord(x) = p^n - 1
+    /// 2. x is a primitive element of F_p\[x\]/(f(x)), i.e., ord(x) = p^n - 1
     ///
     /// Primitive polynomials are used to construct maximal-length LFSRs
     /// and are important in coding theory and cryptography.

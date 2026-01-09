@@ -11,7 +11,7 @@ use crate::structures::fp::Fp;
 #[cfg(feature = "alloc")]
 use crate::structures::poly::Poly;
 
-/// Extension field F_p[x]/(f(x)) where f(x) is an irreducible polynomial of degree D.
+/// Extension field F_p\[x\]/(f(x)) where f(x) is an irreducible polynomial of degree D.
 ///
 /// Elements are represented as polynomials of degree < D, stored as an array of D coefficients.
 /// The modulus polynomial must be provided separately when performing field operations.
@@ -682,7 +682,7 @@ impl<'a, const P: u64, const D: usize> ExtFieldWithModulus<'a, P, D> {
     }
 }
 
-/// Tower extension field F_{p^D1}[y]/(g(y)) where g(y) is irreducible of degree D2.
+/// Tower extension field F_{p^D1}\[y\]/(g(y)) where g(y) is irreducible of degree D2.
 ///
 /// This represents a degree-D2 extension over F_{p^D1}, giving a total extension
 /// of degree D1*D2 over F_p.
