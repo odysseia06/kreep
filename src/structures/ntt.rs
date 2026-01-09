@@ -31,6 +31,286 @@ pub struct NttInfo {
     pub primitive_root: u64,
 }
 
+/// A precomputed NTT plan for a specific size.
+///
+/// This caches twiddle factors for efficient repeated NTT operations of the
+/// same size. Use this when performing many NTT operations with the same size
+/// to avoid recomputing roots of unity each time.
+///
+/// # Example
+///
+/// ```
+/// use kreep::ntt::NttPlan;
+/// use kreep::{Fp, Poly};
+///
+/// type F = Fp<998244353>;
+///
+/// // Create a plan for size 1024
+/// let plan = NttPlan::<998244353>::new(1024).unwrap();
+///
+/// // Use the plan for multiple multiplications
+/// let a = Poly::new(vec![F::new(1), F::new(2), F::new(3)]);
+/// let b = Poly::new(vec![F::new(4), F::new(5)]);
+/// let c = plan.mul(&a, &b);
+///
+/// assert_eq!(c, a * b);
+/// ```
+#[derive(Clone)]
+pub struct NttPlan<const P: u64> {
+    /// The size of the NTT (power of 2)
+    n: usize,
+    /// Precomputed twiddle factors for forward NTT
+    /// twiddles[k] contains the twiddle factors for stage k (length 2^(k+1))
+    twiddles: Vec<Vec<Fp<P>>>,
+    /// Precomputed twiddle factors for inverse NTT
+    inv_twiddles: Vec<Vec<Fp<P>>>,
+    /// Precomputed 1/n for inverse NTT scaling
+    n_inv: Fp<P>,
+}
+
+impl<const P: u64> NttPlan<P> {
+    /// Create a new NTT plan for the given size.
+    ///
+    /// # Arguments
+    /// * `n` - The NTT size (must be a power of 2)
+    ///
+    /// # Returns
+    /// * `Some(plan)` if the prime supports NTT for this size
+    /// * `None` if `n` is not a power of 2 or the prime doesn't support this size
+    pub fn new(n: usize) -> Option<Self> {
+        if n == 0 || !n.is_power_of_two() {
+            return None;
+        }
+
+        let log_n = n.trailing_zeros();
+        let info = ntt_info::<P>()?;
+
+        if log_n > info.max_log2 {
+            return None;
+        }
+
+        // Get the n-th primitive root of unity
+        let omega_max = Fp::<P>::new(info.primitive_root);
+        let omega = omega_max.pow(1u64 << (info.max_log2 - log_n));
+        let omega_inv = omega.inverse()?;
+
+        // Precompute twiddle factors for each stage
+        let mut twiddles = Vec::with_capacity(log_n as usize);
+        let mut inv_twiddles = Vec::with_capacity(log_n as usize);
+
+        for k in 0..log_n {
+            let len = 1 << (k + 1);
+            let half_len = len / 2;
+
+            // ω_len = ω^(n/len) is a primitive len-th root of unity
+            let omega_len = omega.pow((n / len) as u64);
+            let omega_len_inv = omega_inv.pow((n / len) as u64);
+
+            let mut stage_twiddles = Vec::with_capacity(half_len);
+            let mut stage_inv_twiddles = Vec::with_capacity(half_len);
+
+            let mut w = Fp::ONE;
+            let mut w_inv = Fp::ONE;
+
+            for _ in 0..half_len {
+                stage_twiddles.push(w);
+                stage_inv_twiddles.push(w_inv);
+                w = w * omega_len;
+                w_inv = w_inv * omega_len_inv;
+            }
+
+            twiddles.push(stage_twiddles);
+            inv_twiddles.push(stage_inv_twiddles);
+        }
+
+        let n_inv = Fp::<P>::new(n as u64).inverse()?;
+
+        Some(Self {
+            n,
+            twiddles,
+            inv_twiddles,
+            n_inv,
+        })
+    }
+
+    /// Get the NTT size.
+    pub fn size(&self) -> usize {
+        self.n
+    }
+
+    /// Perform forward NTT in-place using precomputed twiddles.
+    ///
+    /// # Panics
+    /// Panics if `a.len() != self.size()`.
+    pub fn ntt(&self, a: &mut [Fp<P>]) {
+        assert_eq!(a.len(), self.n, "Input length must match plan size");
+
+        if self.n <= 1 {
+            return;
+        }
+
+        // Bit-reversal permutation
+        bit_reverse_permutation(a);
+
+        // Cooley-Tukey iterative NTT with precomputed twiddles
+        for (k, stage_twiddles) in self.twiddles.iter().enumerate() {
+            let len = 1 << (k + 1);
+            let half_len = len / 2;
+
+            for start in (0..self.n).step_by(len) {
+                for (j, &w) in stage_twiddles.iter().enumerate() {
+                    let u = a[start + j];
+                    let v = a[start + j + half_len] * w;
+                    a[start + j] = u + v;
+                    a[start + j + half_len] = u - v;
+                }
+            }
+        }
+    }
+
+    /// Perform inverse NTT in-place using precomputed twiddles.
+    ///
+    /// # Panics
+    /// Panics if `a.len() != self.size()`.
+    pub fn intt(&self, a: &mut [Fp<P>]) {
+        assert_eq!(a.len(), self.n, "Input length must match plan size");
+
+        if self.n <= 1 {
+            return;
+        }
+
+        // Bit-reversal permutation
+        bit_reverse_permutation(a);
+
+        // Cooley-Tukey iterative NTT with inverse twiddles
+        for (k, stage_twiddles) in self.inv_twiddles.iter().enumerate() {
+            let len = 1 << (k + 1);
+            let half_len = len / 2;
+
+            for start in (0..self.n).step_by(len) {
+                for (j, &w) in stage_twiddles.iter().enumerate() {
+                    let u = a[start + j];
+                    let v = a[start + j + half_len] * w;
+                    a[start + j] = u + v;
+                    a[start + j + half_len] = u - v;
+                }
+            }
+        }
+
+        // Scale by 1/n
+        for x in a.iter_mut() {
+            *x = *x * self.n_inv;
+        }
+    }
+
+    /// Multiply two polynomials using this NTT plan.
+    ///
+    /// The result polynomial degree is `deg(a) + deg(b)`, so the required
+    /// NTT size is at least `deg(a) + deg(b) + 1`. If the polynomials are
+    /// too large for this plan, use a larger plan.
+    ///
+    /// # Panics
+    /// Panics if the result would require a larger NTT size than this plan supports.
+    pub fn mul(&self, a: &Poly<P>, b: &Poly<P>) -> Poly<P> {
+        if a.is_zero() || b.is_zero() {
+            return Poly::zero();
+        }
+
+        let result_len = a.degree().unwrap() + b.degree().unwrap() + 1;
+        assert!(
+            result_len <= self.n,
+            "Polynomials too large for this plan. Need {} but plan size is {}",
+            result_len,
+            self.n
+        );
+
+        // Pad polynomials to plan size
+        let mut a_coeffs: Vec<Fp<P>> = a.coefficients().to_vec();
+        let mut b_coeffs: Vec<Fp<P>> = b.coefficients().to_vec();
+        a_coeffs.resize(self.n, Fp::ZERO);
+        b_coeffs.resize(self.n, Fp::ZERO);
+
+        // Forward NTT
+        self.ntt(&mut a_coeffs);
+        self.ntt(&mut b_coeffs);
+
+        // Pointwise multiplication
+        for i in 0..self.n {
+            a_coeffs[i] = a_coeffs[i] * b_coeffs[i];
+        }
+
+        // Inverse NTT
+        self.intt(&mut a_coeffs);
+
+        // Trim to actual result length
+        a_coeffs.truncate(result_len);
+
+        Poly::new(a_coeffs)
+    }
+
+    /// Accumulate a product into an existing NTT-domain buffer.
+    ///
+    /// Computes `acc += a * b` where all inputs are in NTT domain.
+    /// This is useful for computing sums of products efficiently:
+    /// `sum_i (a_i * b_i)` can be computed as pointwise operations in NTT domain.
+    ///
+    /// # Arguments
+    /// * `acc` - Accumulator in NTT domain (modified in-place)
+    /// * `a` - First operand in NTT domain
+    /// * `b` - Second operand in NTT domain
+    ///
+    /// # Panics
+    /// Panics if any slice length doesn't match the plan size.
+    pub fn mul_accumulate(&self, acc: &mut [Fp<P>], a: &[Fp<P>], b: &[Fp<P>]) {
+        assert_eq!(acc.len(), self.n, "Accumulator length must match plan size");
+        assert_eq!(a.len(), self.n, "First operand length must match plan size");
+        assert_eq!(
+            b.len(),
+            self.n,
+            "Second operand length must match plan size"
+        );
+
+        for i in 0..self.n {
+            acc[i] = acc[i] + a[i] * b[i];
+        }
+    }
+
+    /// Transform a polynomial to NTT domain.
+    ///
+    /// Returns a vector of NTT values. The input polynomial is padded to the
+    /// plan size with zeros.
+    ///
+    /// # Panics
+    /// Panics if the polynomial degree is >= plan size.
+    pub fn forward(&self, p: &Poly<P>) -> Vec<Fp<P>> {
+        if let Some(deg) = p.degree() {
+            assert!(
+                deg < self.n,
+                "Polynomial degree {} too large for plan size {}",
+                deg,
+                self.n
+            );
+        }
+
+        let mut coeffs: Vec<Fp<P>> = p.coefficients().to_vec();
+        coeffs.resize(self.n, Fp::ZERO);
+        self.ntt(&mut coeffs);
+        coeffs
+    }
+
+    /// Transform NTT values back to a polynomial.
+    ///
+    /// # Panics
+    /// Panics if `values.len() != self.size()`.
+    pub fn backward(&self, values: &[Fp<P>]) -> Poly<P> {
+        assert_eq!(values.len(), self.n, "Values length must match plan size");
+
+        let mut coeffs = values.to_vec();
+        self.intt(&mut coeffs);
+        Poly::new(coeffs)
+    }
+}
+
 /// Check if a prime p supports NTT and return relevant information.
 ///
 /// Returns `Some(NttInfo)` if p is NTT-friendly (i.e., p-1 has a large power of 2).
@@ -480,5 +760,146 @@ mod tests {
         assert_eq!(prime_factors(17), vec![17u64]);
         assert_eq!(prime_factors(1), Vec::<u64>::new());
         assert_eq!(prime_factors(2), vec![2u64]);
+    }
+
+    // ---- NttPlan tests ----
+
+    #[test]
+    fn ntt_plan_new() {
+        let plan = NttPlan::<NTT_PRIME>::new(1024);
+        assert!(plan.is_some());
+        assert_eq!(plan.unwrap().size(), 1024);
+    }
+
+    #[test]
+    fn ntt_plan_invalid_size() {
+        // Not a power of 2
+        assert!(NttPlan::<NTT_PRIME>::new(100).is_none());
+        assert!(NttPlan::<NTT_PRIME>::new(0).is_none());
+    }
+
+    #[test]
+    fn ntt_plan_too_large() {
+        // 2^24 > 2^23, so this should fail for 998244353
+        let plan = NttPlan::<NTT_PRIME>::new(1 << 24);
+        assert!(plan.is_none());
+    }
+
+    #[test]
+    fn ntt_plan_roundtrip() {
+        let plan = NttPlan::<NTT_PRIME>::new(8).unwrap();
+
+        let original: Vec<F> = (0..8).map(|i| F::new(i + 1)).collect();
+        let mut a = original.clone();
+
+        plan.ntt(&mut a);
+        plan.intt(&mut a);
+
+        assert_eq!(a, original);
+    }
+
+    #[test]
+    fn ntt_plan_roundtrip_large() {
+        let plan = NttPlan::<NTT_PRIME>::new(1024).unwrap();
+
+        let original: Vec<F> = (0..1024).map(|i| F::new(i as u64)).collect();
+        let mut a = original.clone();
+
+        plan.ntt(&mut a);
+        plan.intt(&mut a);
+
+        assert_eq!(a, original);
+    }
+
+    #[test]
+    fn ntt_plan_mul() {
+        let plan = NttPlan::<NTT_PRIME>::new(8).unwrap();
+
+        let a = P::new(vec![F::new(1), F::new(2), F::new(3)]);
+        let b = P::new(vec![F::new(4), F::new(5)]);
+
+        let c = plan.mul(&a, &b);
+        let expected = a.clone() * b.clone();
+
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn ntt_plan_mul_matches_naive() {
+        let plan = NttPlan::<NTT_PRIME>::new(256).unwrap();
+
+        let a = P::new((1..=50).map(F::new).collect());
+        let b = P::new((1..=40).map(|i| F::new(i * 2)).collect());
+
+        let plan_result = plan.mul(&a, &b);
+        let naive_result = a * b;
+
+        assert_eq!(plan_result, naive_result);
+    }
+
+    #[test]
+    fn ntt_plan_mul_with_zero() {
+        let plan = NttPlan::<NTT_PRIME>::new(8).unwrap();
+
+        let a = P::new(vec![F::new(1), F::new(2)]);
+        let zero = P::zero();
+
+        assert_eq!(plan.mul(&a, &zero), P::zero());
+        assert_eq!(plan.mul(&zero, &a), P::zero());
+    }
+
+    #[test]
+    fn ntt_plan_forward_backward() {
+        let plan = NttPlan::<NTT_PRIME>::new(16).unwrap();
+
+        let p = P::new(vec![F::new(1), F::new(2), F::new(3), F::new(4)]);
+        let ntt_values = plan.forward(&p);
+        let recovered = plan.backward(&ntt_values);
+
+        assert_eq!(p, recovered);
+    }
+
+    #[test]
+    fn ntt_plan_mul_accumulate() {
+        let plan = NttPlan::<NTT_PRIME>::new(16).unwrap();
+
+        let a = P::new(vec![F::new(1), F::new(2)]);
+        let b = P::new(vec![F::new(3), F::new(4)]);
+        let c = P::new(vec![F::new(5), F::new(6)]);
+        let d = P::new(vec![F::new(7), F::new(8)]);
+
+        // Compute a*b + c*d using NTT domain accumulation
+        let a_ntt = plan.forward(&a);
+        let b_ntt = plan.forward(&b);
+        let c_ntt = plan.forward(&c);
+        let d_ntt = plan.forward(&d);
+
+        let mut acc = vec![F::ZERO; plan.size()];
+        plan.mul_accumulate(&mut acc, &a_ntt, &b_ntt);
+        plan.mul_accumulate(&mut acc, &c_ntt, &d_ntt);
+
+        let result = plan.backward(&acc);
+
+        // Compare with naive computation
+        let expected = a * b + c * d;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn ntt_plan_matches_regular_ntt() {
+        let plan = NttPlan::<NTT_PRIME>::new(8).unwrap();
+        let omega = get_root_of_unity::<NTT_PRIME>(8).unwrap();
+
+        let original: Vec<F> = (0..8).map(|i| F::new(i + 1)).collect();
+
+        // Using plan
+        let mut a_plan = original.clone();
+        plan.ntt(&mut a_plan);
+
+        // Using regular ntt
+        let mut a_regular = original.clone();
+        ntt(&mut a_regular, omega);
+
+        assert_eq!(a_plan, a_regular);
     }
 }
