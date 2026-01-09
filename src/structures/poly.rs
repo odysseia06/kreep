@@ -200,6 +200,31 @@ impl<const P: u64> Poly<P> {
         result
     }
 
+    /// Evaluate the polynomial at multiple points.
+    ///
+    /// This is equivalent to calling [`eval`](Self::eval) on each point,
+    /// but expressed as a single operation for convenience.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // p(x) = 1 + 2x + x^2
+    /// let p = Poly::new(vec![F17::new(1), F17::new(2), F17::new(1)]);
+    ///
+    /// let points = [F17::new(0), F17::new(1), F17::new(2)];
+    /// let values = p.eval_many(&points);
+    ///
+    /// // p(0) = 1, p(1) = 4, p(2) = 9
+    /// assert_eq!(values, vec![F17::new(1), F17::new(4), F17::new(9)]);
+    /// ```
+    pub fn eval_many(&self, xs: &[Fp<P>]) -> Vec<Fp<P>> {
+        xs.iter().map(|&x| self.eval(x)).collect()
+    }
+
     /// Remove trailing zero coefficients.
     fn normalize(&mut self) {
         while self.coeffs.last() == Some(&Fp::ZERO) {
@@ -236,6 +261,71 @@ impl<const P: u64> Poly<P> {
         }
 
         result
+    }
+
+    /// Divide a polynomial by a linear factor `(x - r)` using synthetic division.
+    ///
+    /// Returns `(quotient, remainder)` where `self = quotient * (x - r) + remainder`.
+    /// The remainder is a constant (the value `self.eval(r)`).
+    ///
+    /// This is more efficient than general polynomial division when the divisor
+    /// is known to be linear.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly};
+    ///
+    /// type F17 = Fp<17>;
+    ///
+    /// // p(x) = x^2 - 3x + 2 = (x - 1)(x - 2)
+    /// let p = Poly::new(vec![F17::new(2), F17::new(17 - 3), F17::new(1)]);
+    ///
+    /// // Divide by (x - 1)
+    /// let (q, rem) = p.div_by_linear(F17::new(1));
+    ///
+    /// // Remainder should be p(1) = 0
+    /// assert_eq!(rem, F17::new(0));
+    ///
+    /// // Quotient should be (x - 2)
+    /// assert_eq!(q, Poly::new(vec![F17::new(17 - 2), F17::new(1)]));
+    /// ```
+    pub fn div_by_linear(&self, r: Fp<P>) -> (Self, Fp<P>) {
+        if self.coeffs.is_empty() {
+            return (Self::zero(), Fp::ZERO);
+        }
+
+        if self.coeffs.len() == 1 {
+            // Constant polynomial: quotient is 0, remainder is the constant
+            return (Self::zero(), self.coeffs[0]);
+        }
+
+        // Synthetic division (Horner's method for division)
+        // If p(x) = a_n x^n + ... + a_1 x + a_0
+        // and p(x) = q(x)(x - r) + remainder
+        // then q(x) = b_{n-1} x^{n-1} + ... + b_1 x + b_0
+        // where b_{n-1} = a_n, b_{k-1} = a_k + r * b_k, remainder = a_0 + r * b_0
+        let n = self.coeffs.len();
+        let mut quotient_coeffs = Vec::with_capacity(n - 1);
+
+        // Process from highest degree down
+        let mut carry = Fp::ZERO;
+        for &coeff in self.coeffs.iter().rev() {
+            let new_val = coeff + carry;
+            quotient_coeffs.push(new_val);
+            carry = new_val * r;
+        }
+
+        // The last value pushed is the remainder (from constant term)
+        let remainder = quotient_coeffs.pop().unwrap();
+
+        // Reverse to get coefficients in ascending order
+        quotient_coeffs.reverse();
+
+        let mut quotient = Self::new(quotient_coeffs);
+        quotient.normalize();
+
+        (quotient, remainder)
     }
 
     /// Make the polynomial monic (leading coefficient = 1).
@@ -2784,6 +2874,137 @@ mod tests {
 
         let roots = f.roots(&mut rng);
         assert!(roots.is_empty());
+    }
+
+    // ---- eval_many tests ----
+
+    #[test]
+    fn eval_many_empty() {
+        let p = P17::new(vec![F17::new(1), F17::new(2), F17::new(1)]);
+        let values = p.eval_many(&[]);
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn eval_many_single() {
+        let p = P17::new(vec![F17::new(1), F17::new(2), F17::new(1)]);
+        let values = p.eval_many(&[F17::new(3)]);
+        assert_eq!(values, vec![p.eval(F17::new(3))]);
+    }
+
+    #[test]
+    fn eval_many_multiple() {
+        // p(x) = 1 + 2x + x^2 = (x + 1)^2
+        let p = P17::new(vec![F17::new(1), F17::new(2), F17::new(1)]);
+        let points = [F17::new(0), F17::new(1), F17::new(2), F17::new(16)];
+        let values = p.eval_many(&points);
+
+        // Check each value matches individual eval
+        for (i, &x) in points.iter().enumerate() {
+            assert_eq!(values[i], p.eval(x));
+        }
+
+        // p(0) = 1, p(1) = 4, p(2) = 9, p(16) = p(-1) = 0
+        assert_eq!(values[0], F17::new(1));
+        assert_eq!(values[1], F17::new(4));
+        assert_eq!(values[2], F17::new(9));
+        assert_eq!(values[3], F17::new(0));
+    }
+
+    #[test]
+    fn eval_many_zero_poly() {
+        let p = P17::zero();
+        let values = p.eval_many(&[F17::new(1), F17::new(2), F17::new(3)]);
+        assert_eq!(values, vec![F17::ZERO, F17::ZERO, F17::ZERO]);
+    }
+
+    // ---- div_by_linear tests ----
+
+    #[test]
+    fn div_by_linear_zero_poly() {
+        let p = P17::zero();
+        let (q, rem) = p.div_by_linear(F17::new(3));
+        assert!(q.is_zero());
+        assert_eq!(rem, F17::ZERO);
+    }
+
+    #[test]
+    fn div_by_linear_constant() {
+        let p = P17::constant(F17::new(7));
+        let (q, rem) = p.div_by_linear(F17::new(3));
+        assert!(q.is_zero());
+        assert_eq!(rem, F17::new(7));
+    }
+
+    #[test]
+    fn div_by_linear_exact() {
+        // (x - 2)(x - 5) = x^2 - 7x + 10
+        let p = P17::from_roots(&[F17::new(2), F17::new(5)]);
+
+        // Divide by (x - 2), should get (x - 5) exactly
+        let (q, rem) = p.div_by_linear(F17::new(2));
+        assert_eq!(rem, F17::ZERO);
+        assert_eq!(q, P17::new(vec![-F17::new(5), F17::ONE]));
+
+        // Divide by (x - 5), should get (x - 2) exactly
+        let (q, rem) = p.div_by_linear(F17::new(5));
+        assert_eq!(rem, F17::ZERO);
+        assert_eq!(q, P17::new(vec![-F17::new(2), F17::ONE]));
+    }
+
+    #[test]
+    fn div_by_linear_with_remainder() {
+        // p(x) = x^2 + 1, divide by (x - 2)
+        // p(2) = 5, so remainder should be 5
+        let p = P17::new(vec![F17::new(1), F17::ZERO, F17::ONE]);
+        let (q, rem) = p.div_by_linear(F17::new(2));
+
+        assert_eq!(rem, F17::new(5)); // p(2) = 5
+        assert_eq!(rem, p.eval(F17::new(2)));
+
+        // Verify: q * (x - 2) + rem = p
+        let divisor = P17::new(vec![-F17::new(2), F17::ONE]);
+        let reconstructed = q * divisor + P17::constant(rem);
+        assert_eq!(reconstructed, p);
+    }
+
+    #[test]
+    fn div_by_linear_linear_poly() {
+        // (x + 3) / (x - 2) should give quotient 1 and remainder 5
+        let p = P17::new(vec![F17::new(3), F17::ONE]);
+        let (q, rem) = p.div_by_linear(F17::new(2));
+
+        assert_eq!(q, P17::constant(F17::ONE));
+        assert_eq!(rem, F17::new(5)); // p(2) = 5
+    }
+
+    #[test]
+    fn div_by_linear_higher_degree() {
+        // p(x) = x^4 - 1, divide by (x - 1)
+        // p(1) = 0, so this should divide exactly
+        let p = P17::new(vec![-F17::ONE, F17::ZERO, F17::ZERO, F17::ZERO, F17::ONE]);
+        let (q, rem) = p.div_by_linear(F17::ONE);
+
+        assert_eq!(rem, F17::ZERO);
+        assert_eq!(q.degree(), Some(3));
+
+        // Verify: q * (x - 1) = p
+        let divisor = P17::new(vec![-F17::ONE, F17::ONE]);
+        assert_eq!(q * divisor, p);
+    }
+
+    #[test]
+    fn div_by_linear_matches_div_rem() {
+        // Verify div_by_linear gives same result as general div_rem
+        let p = P17::new(vec![F17::new(1), F17::new(2), F17::new(3), F17::new(4)]);
+        let r = F17::new(7);
+
+        let (q1, rem1) = p.div_by_linear(r);
+        let divisor = P17::new(vec![-r, F17::ONE]);
+        let (q2, rem2) = p.div_rem(&divisor).unwrap();
+
+        assert_eq!(q1, q2);
+        assert_eq!(rem1, rem2.coeff(0));
     }
 }
 
