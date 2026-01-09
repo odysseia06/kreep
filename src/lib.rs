@@ -42,7 +42,7 @@ pub use structures::gf;
 #[cfg(all(feature = "serde", feature = "alloc"))]
 pub use structures::gf::GFWithModulus;
 #[cfg(feature = "alloc")]
-pub use structures::gf::{Modulus, ModulusError};
+pub use structures::gf::{Modulus, ModulusError, TowerGF, TowerModulus};
 #[cfg(feature = "alloc")]
 pub use structures::ntt;
 #[cfg(feature = "alloc")]

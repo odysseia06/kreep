@@ -467,6 +467,427 @@ impl<const P: u64, const D: usize> fmt::Display for GF<P, D> {
     }
 }
 
+// ============================================================================
+// TowerModulus and TowerGF for tower extensions
+// ============================================================================
+
+use crate::structures::ext::TowerField;
+
+/// A validated modulus pair for tower field extensions.
+///
+/// This struct bundles:
+/// - An inner modulus (irreducible polynomial for F_p → F_{p^D1})
+/// - An outer modulus (coefficients for F_{p^D1} → F_{p^{D1*D2}})
+///
+/// The outer modulus is stored as D2 coefficients representing the non-leading
+/// terms of a monic polynomial of degree D2 over F_{p^D1}.
+///
+/// # Example
+///
+/// ```
+/// use kreep::gf::{TowerModulus, Modulus, irreducible_poly_deg2};
+/// use kreep::{ExtField, Fp, Ring};
+///
+/// type F17 = Fp<17>;
+/// type Ext2 = ExtField<17, 2>;
+///
+/// // Inner modulus: x^2 - 3 for F_17 → F_{17^2}
+/// let inner = Modulus::<17, 2>::new_unchecked(irreducible_poly_deg2::<17>()).unwrap();
+///
+/// // Outer modulus: y^2 - x for F_{17^2} → F_{17^4}
+/// // Stored as [-x, 0] (coefficients of y^0 and y^1)
+/// let outer_coeffs = [
+///     Ext2::new([F17::ZERO, F17::new(16)]), // -x
+///     Ext2::zero(),
+/// ];
+///
+/// let tower_mod = TowerModulus::<17, 2, 2>::new(inner, outer_coeffs);
+/// ```
+#[derive(Clone)]
+pub struct TowerModulus<const P: u64, const D1: usize, const D2: usize> {
+    inner: Modulus<P, D1>,
+    outer: [ExtField<P, D1>; D2],
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> TowerModulus<P, D1, D2> {
+    /// Create a new tower modulus from inner and outer moduli.
+    pub fn new(inner: Modulus<P, D1>, outer: [ExtField<P, D1>; D2]) -> Self {
+        Self { inner, outer }
+    }
+
+    /// Get a reference to the inner modulus.
+    pub fn inner(&self) -> &Modulus<P, D1> {
+        &self.inner
+    }
+
+    /// Get the inner modulus polynomial.
+    pub fn inner_poly(&self) -> &Poly<P> {
+        self.inner.poly()
+    }
+
+    /// Get a reference to the outer modulus coefficients.
+    pub fn outer(&self) -> &[ExtField<P, D1>; D2] {
+        &self.outer
+    }
+
+    /// Get the outer modulus as a slice.
+    pub fn outer_slice(&self) -> &[ExtField<P, D1>] {
+        &self.outer
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> fmt::Debug for TowerModulus<P, D1, D2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TowerModulus {{ inner: {:?}, outer: {:?} }}",
+            self.inner, self.outer
+        )
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> PartialEq for TowerModulus<P, D1, D2> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner && self.outer == other.outer
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Eq for TowerModulus<P, D1, D2> {}
+
+/// A tower field element with its modulus.
+///
+/// This struct bundles a tower field element with its modulus pair,
+/// allowing natural arithmetic operations without explicitly passing
+/// the moduli each time.
+///
+/// The modulus is shared via `Rc` so that field elements can be cloned
+/// efficiently while sharing the same modulus.
+///
+/// # Example
+///
+/// ```
+/// use kreep::gf::{TowerGF, TowerModulus, Modulus, irreducible_poly_deg2};
+/// use kreep::{ExtField, Fp, Ring};
+/// use std::rc::Rc;
+///
+/// type F17 = Fp<17>;
+/// type Ext2 = ExtField<17, 2>;
+///
+/// // Create tower modulus for F_{17^4} = F_{17^2}[y]/(y^2 - x)
+/// let inner = Modulus::<17, 2>::new_unchecked(irreducible_poly_deg2::<17>()).unwrap();
+/// let outer_coeffs = [
+///     Ext2::new([F17::ZERO, F17::new(16)]), // -x
+///     Ext2::zero(),
+/// ];
+/// let modulus = Rc::new(TowerModulus::<17, 2, 2>::new(inner, outer_coeffs));
+///
+/// // Create elements
+/// let a = TowerGF::new(
+///     [Ext2::new([F17::new(1), F17::new(2)]), Ext2::new([F17::new(3), F17::new(4)])],
+///     Rc::clone(&modulus),
+/// );
+/// let b = TowerGF::new(
+///     [Ext2::new([F17::new(5), F17::new(6)]), Ext2::new([F17::new(7), F17::new(8)])],
+///     Rc::clone(&modulus),
+/// );
+///
+/// // Arithmetic works naturally
+/// let c = &a * &b;
+/// let d = &a + &b;
+/// ```
+#[derive(Clone)]
+pub struct TowerGF<const P: u64, const D1: usize, const D2: usize> {
+    elem: TowerField<P, D1, D2>,
+    modulus: Rc<TowerModulus<P, D1, D2>>,
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> TowerGF<P, D1, D2> {
+    /// Create a new tower field element from coefficients and a shared modulus.
+    pub fn new(coeffs: [ExtField<P, D1>; D2], modulus: Rc<TowerModulus<P, D1, D2>>) -> Self {
+        Self {
+            elem: TowerField::new(coeffs),
+            modulus,
+        }
+    }
+
+    /// Create a new tower field element from a TowerField and a shared modulus.
+    pub fn from_tower(elem: TowerField<P, D1, D2>, modulus: Rc<TowerModulus<P, D1, D2>>) -> Self {
+        Self { elem, modulus }
+    }
+
+    /// Create the zero element with the same modulus as another element.
+    pub fn zero_like(other: &Self) -> Self {
+        Self {
+            elem: TowerField::zero(),
+            modulus: Rc::clone(&other.modulus),
+        }
+    }
+
+    /// Create the one element with the same modulus as another element.
+    pub fn one_like(other: &Self) -> Self {
+        Self {
+            elem: TowerField::one(),
+            modulus: Rc::clone(&other.modulus),
+        }
+    }
+
+    /// Create an element representing y with the same modulus.
+    pub fn y_like(other: &Self) -> Option<Self> {
+        TowerField::y().map(|elem| Self {
+            elem,
+            modulus: Rc::clone(&other.modulus),
+        })
+    }
+
+    /// Create a tower field element from a base extension field element.
+    pub fn from_base(c: ExtField<P, D1>, modulus: Rc<TowerModulus<P, D1, D2>>) -> Self {
+        Self {
+            elem: TowerField::from_base(c),
+            modulus,
+        }
+    }
+
+    /// Create a tower field element from a prime field element.
+    pub fn from_prime(c: Fp<P>, modulus: Rc<TowerModulus<P, D1, D2>>) -> Self {
+        Self {
+            elem: TowerField::from_prime(c),
+            modulus,
+        }
+    }
+
+    /// Get the underlying TowerField element.
+    pub fn elem(&self) -> &TowerField<P, D1, D2> {
+        &self.elem
+    }
+
+    /// Get the modulus.
+    pub fn modulus(&self) -> &TowerModulus<P, D1, D2> {
+        &self.modulus
+    }
+
+    /// Get the shared modulus reference.
+    pub fn modulus_rc(&self) -> Rc<TowerModulus<P, D1, D2>> {
+        Rc::clone(&self.modulus)
+    }
+
+    /// Get a specific coefficient.
+    pub fn coeff(&self, i: usize) -> ExtField<P, D1> {
+        self.elem.coeff(i)
+    }
+
+    /// Check if this is the zero element.
+    pub fn is_zero(&self) -> bool {
+        self.elem.is_zero()
+    }
+
+    /// Check if this is the one element.
+    pub fn is_one(&self) -> bool {
+        self.elem == TowerField::one()
+    }
+
+    /// Compute the multiplicative inverse.
+    ///
+    /// Returns `None` if the element is zero or if D2 != 2 (general inverse
+    /// not yet implemented for higher degree towers).
+    pub fn inverse(&self) -> Option<Self> {
+        self.elem
+            .inverse_mod(self.modulus.inner_poly(), self.modulus.outer_slice())
+            .map(|inv| Self {
+                elem: inv,
+                modulus: Rc::clone(&self.modulus),
+            })
+    }
+
+    /// Compute self^exp.
+    pub fn pow(&self, exp: u64) -> Self {
+        Self {
+            elem: self
+                .elem
+                .pow_mod(exp, self.modulus.inner_poly(), self.modulus.outer_slice()),
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+
+    /// Frobenius endomorphism: x -> x^p.
+    pub fn frobenius(&self) -> Self {
+        Self {
+            elem: self
+                .elem
+                .frobenius(self.modulus.inner_poly(), self.modulus.outer_slice()),
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+
+    /// Assert that two elements share the same modulus.
+    fn assert_same_modulus(&self, other: &Self) {
+        assert!(
+            Rc::ptr_eq(&self.modulus, &other.modulus) || *self.modulus == *other.modulus,
+            "TowerGF elements must have the same modulus"
+        );
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Add for TowerGF<P, D1, D2> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(&rhs);
+        Self {
+            elem: self.elem + rhs.elem,
+            modulus: self.modulus,
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Add for &TowerGF<P, D1, D2> {
+    type Output = TowerGF<P, D1, D2>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(rhs);
+        TowerGF {
+            elem: self.elem + rhs.elem,
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Sub for TowerGF<P, D1, D2> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(&rhs);
+        Self {
+            elem: self.elem - rhs.elem,
+            modulus: self.modulus,
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Sub for &TowerGF<P, D1, D2> {
+    type Output = TowerGF<P, D1, D2>;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(rhs);
+        TowerGF {
+            elem: self.elem - rhs.elem,
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Neg for TowerGF<P, D1, D2> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            elem: -self.elem,
+            modulus: self.modulus,
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Neg for &TowerGF<P, D1, D2> {
+    type Output = TowerGF<P, D1, D2>;
+
+    fn neg(self) -> Self::Output {
+        TowerGF {
+            elem: -self.elem,
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Mul for TowerGF<P, D1, D2> {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(&rhs);
+        Self {
+            elem: self.elem.mul_mod(
+                &rhs.elem,
+                self.modulus.inner_poly(),
+                self.modulus.outer_slice(),
+            ),
+            modulus: self.modulus,
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Mul for &TowerGF<P, D1, D2> {
+    type Output = TowerGF<P, D1, D2>;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(rhs);
+        TowerGF {
+            elem: self.elem.mul_mod(
+                &rhs.elem,
+                self.modulus.inner_poly(),
+                self.modulus.outer_slice(),
+            ),
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Div for TowerGF<P, D1, D2> {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(&rhs);
+        let rhs_inv = rhs.inverse().expect("division by zero");
+        Self {
+            elem: self.elem.mul_mod(
+                &rhs_inv.elem,
+                self.modulus.inner_poly(),
+                self.modulus.outer_slice(),
+            ),
+            modulus: self.modulus,
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Div for &TowerGF<P, D1, D2> {
+    type Output = TowerGF<P, D1, D2>;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        self.assert_same_modulus(rhs);
+        let rhs_inv = rhs.inverse().expect("division by zero");
+        TowerGF {
+            elem: self.elem.mul_mod(
+                &rhs_inv.elem,
+                self.modulus.inner_poly(),
+                self.modulus.outer_slice(),
+            ),
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> PartialEq for TowerGF<P, D1, D2> {
+    fn eq(&self, other: &Self) -> bool {
+        (Rc::ptr_eq(&self.modulus, &other.modulus) || *self.modulus == *other.modulus)
+            && self.elem == other.elem
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> Eq for TowerGF<P, D1, D2> {}
+
+impl<const P: u64, const D1: usize, const D2: usize> fmt::Debug for TowerGF<P, D1, D2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.elem)
+    }
+}
+
+impl<const P: u64, const D1: usize, const D2: usize> fmt::Display for TowerGF<P, D1, D2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+// ============================================================================
+// Helper functions for constructing standard fields
+// ============================================================================
+
 /// Returns a standard irreducible polynomial for GF(p^2).
 ///
 /// For quadratic extensions, we find the smallest `a` such that `x^2 - a`
@@ -1322,5 +1743,270 @@ mod serde_tests {
         let with_mod: GFWithModulus<17, 2> = serde_json::from_str(json).unwrap();
         let result = with_mod.to_gf();
         assert!(matches!(result, Err(ModulusError::WrongDegree { .. })));
+    }
+
+    // ---- TowerGF tests ----
+
+    type Ext2 = ExtField<17, 2>;
+
+    fn make_tower_modulus() -> Rc<TowerModulus<17, 2, 2>> {
+        let inner = Modulus::<17, 2>::new_unchecked(irreducible_poly_deg2::<17>()).unwrap();
+        // y^2 - x: stored as [-x, 0]
+        let outer = [
+            Ext2::new([F17::ZERO, F17::new(16)]), // -x = 16x mod 17
+            Ext2::zero(),
+        ];
+        Rc::new(TowerModulus::new(inner, outer))
+    }
+
+    #[test]
+    fn tower_gf_new_and_coeff() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            modulus,
+        );
+        assert_eq!(a.coeff(0), Ext2::new([F17::new(1), F17::new(2)]));
+        assert_eq!(a.coeff(1), Ext2::new([F17::new(3), F17::new(4)]));
+    }
+
+    #[test]
+    fn tower_gf_zero_one() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            modulus,
+        );
+
+        let zero = TowerGF::zero_like(&a);
+        let one = TowerGF::one_like(&a);
+
+        assert!(zero.is_zero());
+        assert!(!one.is_zero());
+        assert!(one.is_one());
+    }
+
+    #[test]
+    fn tower_gf_add() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            Rc::clone(&modulus),
+        );
+        let b = TowerGF::new(
+            [
+                Ext2::new([F17::new(5), F17::new(6)]),
+                Ext2::new([F17::new(7), F17::new(8)]),
+            ],
+            modulus,
+        );
+
+        let c = &a + &b;
+        assert_eq!(c.coeff(0), Ext2::new([F17::new(6), F17::new(8)]));
+        assert_eq!(c.coeff(1), Ext2::new([F17::new(10), F17::new(12)]));
+    }
+
+    #[test]
+    fn tower_gf_sub() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(5), F17::new(6)]),
+                Ext2::new([F17::new(7), F17::new(8)]),
+            ],
+            Rc::clone(&modulus),
+        );
+        let b = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            modulus,
+        );
+
+        let c = &a - &b;
+        assert_eq!(c.coeff(0), Ext2::new([F17::new(4), F17::new(4)]));
+        assert_eq!(c.coeff(1), Ext2::new([F17::new(4), F17::new(4)]));
+    }
+
+    #[test]
+    fn tower_gf_neg() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            modulus,
+        );
+
+        let neg_a = -&a;
+        assert_eq!(neg_a.coeff(0), Ext2::new([F17::new(16), F17::new(15)]));
+        assert_eq!(neg_a.coeff(1), Ext2::new([F17::new(14), F17::new(13)]));
+    }
+
+    #[test]
+    fn tower_gf_mul_identity() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(2), F17::new(3)]),
+                Ext2::new([F17::new(5), F17::new(7)]),
+            ],
+            Rc::clone(&modulus),
+        );
+        let one = TowerGF::one_like(&a);
+
+        let result = &a * &one;
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn tower_gf_mul_commutative() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(2), F17::new(3)]),
+                Ext2::new([F17::new(5), F17::new(7)]),
+            ],
+            Rc::clone(&modulus),
+        );
+        let b = TowerGF::new(
+            [
+                Ext2::new([F17::new(11), F17::new(13)]),
+                Ext2::new([F17::new(1), F17::new(2)]),
+            ],
+            modulus,
+        );
+
+        assert_eq!(&a * &b, &b * &a);
+    }
+
+    #[test]
+    fn tower_gf_inverse() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(2), F17::new(3)]),
+                Ext2::new([F17::new(5), F17::new(7)]),
+            ],
+            modulus,
+        );
+
+        let a_inv = a.inverse().unwrap();
+        let product = &a * &a_inv;
+
+        assert!(product.is_one());
+    }
+
+    #[test]
+    fn tower_gf_div() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(2), F17::new(3)]),
+                Ext2::new([F17::new(5), F17::new(7)]),
+            ],
+            Rc::clone(&modulus),
+        );
+        let b = TowerGF::new(
+            [
+                Ext2::new([F17::new(11), F17::new(13)]),
+                Ext2::new([F17::new(1), F17::new(2)]),
+            ],
+            modulus,
+        );
+
+        let c = &a / &b;
+        // Verify: c * b = a
+        let check = &c * &b;
+        assert_eq!(check, a);
+    }
+
+    #[test]
+    fn tower_gf_pow() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(2), F17::new(3)]),
+                Ext2::new([F17::new(5), F17::new(7)]),
+            ],
+            modulus,
+        );
+
+        // a^0 = 1
+        assert!(a.pow(0).is_one());
+
+        // a^1 = a
+        assert_eq!(a.pow(1), a);
+
+        // a^2 = a * a
+        assert_eq!(a.pow(2), &a * &a);
+    }
+
+    #[test]
+    fn tower_gf_pow_fermat() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(3), F17::new(5)]),
+                Ext2::new([F17::new(7), F17::new(11)]),
+            ],
+            modulus,
+        );
+
+        // In F_{17^4}, every non-zero element satisfies a^{17^4 - 1} = 1
+        let order = 17u64 * 17 * 17 * 17 - 1; // 83520
+        let result = a.pow(order);
+
+        assert!(result.is_one());
+    }
+
+    #[test]
+    fn tower_gf_frobenius() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(2), F17::new(3)]),
+                Ext2::new([F17::new(5), F17::new(7)]),
+            ],
+            modulus,
+        );
+
+        // Frobenius is a^p
+        let frob = a.frobenius();
+        let pow_p = a.pow(17);
+
+        assert_eq!(frob, pow_p);
+    }
+
+    #[test]
+    fn tower_gf_equality() {
+        let modulus = make_tower_modulus();
+        let a = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            Rc::clone(&modulus),
+        );
+        let b = TowerGF::new(
+            [
+                Ext2::new([F17::new(1), F17::new(2)]),
+                Ext2::new([F17::new(3), F17::new(4)]),
+            ],
+            modulus,
+        );
+
+        assert_eq!(a, b);
     }
 }
