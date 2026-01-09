@@ -273,6 +273,311 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
         // The result should be in the base field (degree 0)
         result.coeffs[0]
     }
+
+    /// Compute all conjugates of this element under the Frobenius automorphism.
+    ///
+    /// For an element α in F_{p^d}, the conjugates are α, α^p, α^{p^2}, ..., α^{p^{d-1}}.
+    /// These are the roots of the minimal polynomial of α over F_p.
+    ///
+    /// Requires the `alloc` feature.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly, ExtField, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    /// type Ext2 = ExtField<17, 2>;
+    ///
+    /// // x^2 + 14 = x^2 - 3 is irreducible over F_17
+    /// let modulus = Poly::new(vec![F17::new(14), F17::ZERO, F17::ONE]);
+    ///
+    /// // α = x (the generator)
+    /// let alpha = Ext2::new([F17::ZERO, F17::ONE]);
+    /// let conjugates = alpha.conjugates(&modulus);
+    ///
+    /// assert_eq!(conjugates.len(), 2);
+    /// assert_eq!(conjugates[0], alpha);
+    /// // α^17 is the other conjugate
+    /// ```
+    #[cfg(feature = "alloc")]
+    pub fn conjugates(&self, modulus: &Poly<P>) -> Vec<Self> {
+        let mut result = Vec::with_capacity(D);
+        let mut current = *self;
+
+        for _ in 0..D {
+            result.push(current);
+            current = current.frobenius(modulus);
+        }
+
+        result
+    }
+
+    /// Compute the minimal polynomial of this element over F_p.
+    ///
+    /// The minimal polynomial is the monic polynomial of smallest degree
+    /// with coefficients in F_p that has this element as a root.
+    ///
+    /// For an element α in F_{p^d}, the minimal polynomial divides x^{p^d} - x
+    /// and has degree equal to the smallest k such that α^{p^k} = α.
+    ///
+    /// Requires the `alloc` feature.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly, ExtField, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    /// type Ext2 = ExtField<17, 2>;
+    ///
+    /// // x^2 + 14 = x^2 - 3 is irreducible over F_17
+    /// let modulus = Poly::new(vec![F17::new(14), F17::ZERO, F17::ONE]);
+    ///
+    /// // For α = x (the generator), minimal poly should be x^2 - 3
+    /// let alpha = Ext2::new([F17::ZERO, F17::ONE]);
+    /// let min_poly = alpha.minimal_polynomial(&modulus);
+    ///
+    /// assert_eq!(min_poly.degree(), Some(2));
+    /// // α should be a root of its minimal polynomial
+    /// assert_eq!(alpha.eval_poly(&min_poly, &modulus), Ext2::zero());
+    /// ```
+    #[cfg(feature = "alloc")]
+    pub fn minimal_polynomial(&self, modulus: &Poly<P>) -> Poly<P> {
+        // The minimal polynomial is the product (x - α)(x - α^p)(x - α^{p^2})...
+        // over all distinct conjugates.
+
+        // First find the distinct conjugates (the orbit under Frobenius)
+        let mut conjugates = Vec::new();
+        let mut current = *self;
+
+        loop {
+            conjugates.push(current);
+            current = current.frobenius(modulus);
+            if current == *self {
+                break;
+            }
+            // Safety check to avoid infinite loop
+            if conjugates.len() > D {
+                break;
+            }
+        }
+
+        let k = conjugates.len();
+
+        // Build product (x - α_1)(x - α_2)...(x - α_k) iteratively
+        // using polynomial multiplication over the extension field,
+        // then extract base field coefficients.
+        //
+        // We represent polynomials as Vec<Self> where index = degree.
+
+        // Start with (x - α_0)
+        let mut poly_coeffs: Vec<Self> = vec![Self::zero() - conjugates[0], Self::one()];
+
+        for i in 1..k {
+            // Multiply by (x - α_i)
+            let mut new_coeffs = vec![Self::zero(); poly_coeffs.len() + 1];
+
+            // Shift (multiply by x)
+            for (j, c) in poly_coeffs.iter().enumerate() {
+                new_coeffs[j + 1] = new_coeffs[j + 1] + *c;
+            }
+
+            // Subtract α_i times old poly
+            for (j, c) in poly_coeffs.iter().enumerate() {
+                let term = c.mul_mod(&conjugates[i], modulus);
+                new_coeffs[j] = new_coeffs[j] - term;
+            }
+
+            poly_coeffs = new_coeffs;
+        }
+
+        // Extract base field coefficients
+        // The result should have coefficients in F_p (verified by construction
+        // since we're multiplying conjugates under Galois action)
+        let coeffs: Vec<Fp<P>> = poly_coeffs.iter().map(|c| c.coeffs[0]).collect();
+
+        Poly::new(coeffs)
+    }
+
+    /// Evaluate a polynomial at this extension field element.
+    ///
+    /// This computes p(self) where p is a polynomial over F_p.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
+    pub fn eval_poly(&self, poly: &Poly<P>, modulus: &Poly<P>) -> Self {
+        if poly.is_zero() {
+            return Self::zero();
+        }
+
+        // Horner's method
+        let coefficients = poly.coefficients();
+        let mut result = Self::from_base(coefficients[coefficients.len() - 1]);
+
+        for &coeff in coefficients.iter().rev().skip(1) {
+            result = result.mul_mod(self, modulus);
+            result = result + Self::from_base(coeff);
+        }
+
+        result
+    }
+
+    /// Compute the multiplicative order of this element in the field.
+    ///
+    /// The order is the smallest positive integer n such that self^n = 1.
+    /// Returns `None` if the element is zero (which has no multiplicative order).
+    ///
+    /// For F_{p^d}, the multiplicative group has order p^d - 1, so the order
+    /// of any element divides p^d - 1.
+    ///
+    /// Requires the `alloc` feature.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly, ExtField, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    /// type Ext2 = ExtField<17, 2>;
+    ///
+    /// // x^2 + 14 = x^2 - 3 is irreducible over F_17
+    /// let modulus = Poly::new(vec![F17::new(14), F17::ZERO, F17::ONE]);
+    ///
+    /// // The identity has order 1
+    /// assert_eq!(Ext2::one().order(&modulus), Some(1));
+    ///
+    /// // -1 has order 2
+    /// let neg_one = Ext2::from_base(F17::new(16));
+    /// assert_eq!(neg_one.order(&modulus), Some(2));
+    /// ```
+    #[cfg(feature = "alloc")]
+    pub fn order(&self, modulus: &Poly<P>) -> Option<u64> {
+        if self.is_zero() {
+            return None;
+        }
+        if *self == Self::one() {
+            return Some(1);
+        }
+
+        // The group order is p^d - 1
+        // We need to compute this carefully to avoid overflow
+        let mut group_order: u64 = 1;
+        for _ in 0..D {
+            group_order = group_order.checked_mul(P)?;
+        }
+        group_order -= 1;
+
+        // Factor the group order and find the smallest divisor n such that self^n = 1
+        let factors = Self::factor_u64(group_order);
+
+        // Start with group_order and divide out prime factors while self^n = 1
+        let mut order = group_order;
+        for (prime, mut exp) in factors {
+            while exp > 0 {
+                let candidate = order / prime;
+                if self.pow_mod(candidate, modulus) == Self::one() {
+                    order = candidate;
+                    exp -= 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        Some(order)
+    }
+
+    /// Check if this element is a primitive element (generator) of the field.
+    ///
+    /// An element is primitive if its multiplicative order equals p^d - 1,
+    /// meaning it generates the entire multiplicative group of the field.
+    ///
+    /// Requires the `alloc` feature.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kreep::{Fp, Poly, ExtField, Ring};
+    ///
+    /// type F17 = Fp<17>;
+    /// type Ext2 = ExtField<17, 2>;
+    ///
+    /// // x^2 + 14 = x^2 - 3 is irreducible over F_17
+    /// let modulus = Poly::new(vec![F17::new(14), F17::ZERO, F17::ONE]);
+    ///
+    /// // 1 is not primitive (order 1, not 288)
+    /// assert!(!Ext2::one().is_primitive(&modulus));
+    ///
+    /// // Check if x is primitive
+    /// let x = Ext2::new([F17::ZERO, F17::ONE]);
+    /// // x has some order dividing 288 = 17^2 - 1
+    /// ```
+    #[cfg(feature = "alloc")]
+    pub fn is_primitive(&self, modulus: &Poly<P>) -> bool {
+        if self.is_zero() {
+            return false;
+        }
+
+        // Compute group order p^d - 1
+        let mut group_order: u64 = 1;
+        for _ in 0..D {
+            if let Some(next) = group_order.checked_mul(P) {
+                group_order = next;
+            } else {
+                return false; // Overflow
+            }
+        }
+        group_order -= 1;
+
+        // An element is primitive iff self^(group_order/q) != 1 for all prime q | group_order
+        let factors = Self::factor_u64(group_order);
+
+        for (prime, _) in factors {
+            let exp = group_order / prime;
+            if self.pow_mod(exp, modulus) == Self::one() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Factor a u64 into prime factors with their multiplicities.
+    #[cfg(feature = "alloc")]
+    fn factor_u64(mut n: u64) -> Vec<(u64, u32)> {
+        let mut factors = Vec::new();
+
+        // Handle factor of 2
+        if n % 2 == 0 {
+            let mut exp = 0;
+            while n % 2 == 0 {
+                n /= 2;
+                exp += 1;
+            }
+            factors.push((2, exp));
+        }
+
+        // Check odd factors
+        let mut d = 3u64;
+        while d * d <= n {
+            if n % d == 0 {
+                let mut exp = 0;
+                while n % d == 0 {
+                    n /= d;
+                    exp += 1;
+                }
+                factors.push((d, exp));
+            }
+            d += 2;
+        }
+
+        if n > 1 {
+            factors.push((n, 1));
+        }
+
+        factors
+    }
 }
 
 /* ---- Arithmetic operators (without modulus - for additive operations only) ---- */
@@ -1136,13 +1441,10 @@ mod tests {
     // Degree 3 extension tests
     type Ext3 = ExtField<17, 3>;
 
-    // x^3 - 2 over F_17
-    // Need to verify this is irreducible... 2^{(17-1)/gcd(3,16)} = 2^16 = 1 mod 17
-    // Actually let's use x^3 + x + 1 which is a common irreducible
+    // x^3 + x + 3 is irreducible over F_17
+    // (verified: no roots in F_17)
     fn modulus_cubic() -> Poly<17> {
-        // x^3 + x + 1 - need to verify irreducibility
-        // For now, let's just use it and trust the math
-        Poly::new(vec![F17::ONE, F17::ONE, F17::ZERO, F17::ONE]) // 1 + x + x^3
+        Poly::new(vec![F17::new(3), F17::ONE, F17::ZERO, F17::ONE]) // 3 + x + x^3
     }
 
     #[test]
@@ -1169,14 +1471,14 @@ mod tests {
     fn cubic_extension_x_cubed() {
         let m = modulus_cubic();
 
-        // x^3 ≡ -x - 1 (mod x^3 + x + 1)
+        // x^3 ≡ -x - 3 (mod x^3 + x + 3)
         let x = Ext3::x().unwrap();
         let x2 = x.mul_mod(&x, &m);
         let x3 = x2.mul_mod(&x, &m);
 
-        // x^3 = -x - 1 = 16x + 16
-        assert_eq!(x3.coeff(0), F17::new(16));
-        assert_eq!(x3.coeff(1), F17::new(16));
+        // x^3 = -x - 3 = 16x + 14 (mod 17)
+        assert_eq!(x3.coeff(0), F17::new(14)); // -3 mod 17
+        assert_eq!(x3.coeff(1), F17::new(16)); // -1 mod 17
         assert_eq!(x3.coeff(2), F17::ZERO);
     }
 
@@ -1492,6 +1794,170 @@ mod tests {
         // Should contain both coefficients
         assert!(s.contains("1"));
         assert!(s.contains("y"));
+    }
+
+    // ---- Extension field extras tests ----
+
+    #[test]
+    fn conjugates_degree2() {
+        let modulus = modulus_x2_minus_3();
+        let alpha = Ext2::new([F17::ZERO, F17::ONE]); // x
+
+        let conjugates = alpha.conjugates(&modulus);
+        assert_eq!(conjugates.len(), 2);
+        assert_eq!(conjugates[0], alpha);
+        // The second conjugate is α^17
+        assert_eq!(conjugates[1], alpha.frobenius(&modulus));
+    }
+
+    #[test]
+    fn conjugates_base_element() {
+        let modulus = modulus_x2_minus_3();
+        // An element in the base field has only one distinct conjugate (itself)
+        let a = Ext2::from_base(F17::new(5));
+
+        let conjugates = a.conjugates(&modulus);
+        // All conjugates of a base field element are the same
+        assert_eq!(conjugates[0], a);
+        assert_eq!(conjugates[1], a); // a^p = a for a in F_p
+    }
+
+    #[test]
+    fn minimal_poly_base_element() {
+        let modulus = modulus_x2_minus_3();
+        // For a ∈ F_p, the minimal polynomial is x - a
+        let a = Ext2::from_base(F17::new(5));
+        let min_poly = a.minimal_polynomial(&modulus);
+
+        assert_eq!(min_poly.degree(), Some(1));
+        // Check it's monic
+        assert_eq!(min_poly.leading_coeff(), Some(F17::ONE));
+        // Check a is a root
+        assert_eq!(a.eval_poly(&min_poly, &modulus), Ext2::zero());
+    }
+
+    #[test]
+    fn minimal_poly_generator() {
+        let modulus = modulus_x2_minus_3();
+        // For α = x, the minimal polynomial should be the modulus (x^2 - 3)
+        let alpha = Ext2::new([F17::ZERO, F17::ONE]);
+        let min_poly = alpha.minimal_polynomial(&modulus);
+
+        assert_eq!(min_poly.degree(), Some(2));
+        // Check α is a root
+        assert_eq!(alpha.eval_poly(&min_poly, &modulus), Ext2::zero());
+        // The minimal poly should be x^2 - 3 = x^2 + 14 (mod 17)
+        assert_eq!(min_poly.coeff(0), F17::new(14)); // -3 mod 17
+        assert_eq!(min_poly.coeff(1), F17::ZERO);
+        assert_eq!(min_poly.coeff(2), F17::ONE);
+    }
+
+    #[test]
+    fn eval_poly_basic() {
+        let modulus = modulus_x2_minus_3();
+        // p(x) = 1 + 2x + 3x^2
+        let p = Poly::new(vec![F17::new(1), F17::new(2), F17::new(3)]);
+
+        let alpha = Ext2::new([F17::new(1), F17::new(1)]); // 1 + x
+        let result = alpha.eval_poly(&p, &modulus);
+
+        // p(1 + x) = 1 + 2(1+x) + 3(1+x)^2
+        // (1+x)^2 = 1 + 2x + x^2 = 1 + 2x + 3 = 4 + 2x (since x^2 = 3)
+        // = 1 + 2 + 2x + 3(4 + 2x) = 3 + 2x + 12 + 6x = 15 + 8x
+        assert_eq!(result.coeffs[0], F17::new(15));
+        assert_eq!(result.coeffs[1], F17::new(8));
+    }
+
+    #[test]
+    fn order_one() {
+        let modulus = modulus_x2_minus_3();
+        assert_eq!(Ext2::one().order(&modulus), Some(1));
+    }
+
+    #[test]
+    fn order_minus_one() {
+        let modulus = modulus_x2_minus_3();
+        let neg_one = Ext2::from_base(F17::new(16)); // -1 mod 17
+        assert_eq!(neg_one.order(&modulus), Some(2));
+    }
+
+    #[test]
+    fn order_zero() {
+        let modulus = modulus_x2_minus_3();
+        assert_eq!(Ext2::zero().order(&modulus), None);
+    }
+
+    #[test]
+    fn order_divides_group_order() {
+        let modulus = modulus_x2_minus_3();
+        let alpha = Ext2::new([F17::ZERO, F17::ONE]); // x
+        let order = alpha.order(&modulus).unwrap();
+
+        // Order must divide p^2 - 1 = 288
+        assert_eq!(288 % order, 0);
+        // And α^order = 1
+        assert_eq!(alpha.pow_mod(order, &modulus), Ext2::one());
+    }
+
+    #[test]
+    fn is_primitive_one() {
+        let modulus = modulus_x2_minus_3();
+        // 1 is not primitive
+        assert!(!Ext2::one().is_primitive(&modulus));
+    }
+
+    #[test]
+    fn is_primitive_zero() {
+        let modulus = modulus_x2_minus_3();
+        // 0 is not primitive
+        assert!(!Ext2::zero().is_primitive(&modulus));
+    }
+
+    #[test]
+    fn is_primitive_consistency() {
+        let modulus = modulus_x2_minus_3();
+        let alpha = Ext2::new([F17::ZERO, F17::ONE]); // x
+
+        // An element is primitive iff its order equals p^d - 1
+        let is_prim = alpha.is_primitive(&modulus);
+        let order = alpha.order(&modulus).unwrap();
+
+        // Group order is 17^2 - 1 = 288
+        assert_eq!(is_prim, order == 288);
+    }
+
+    #[test]
+    fn find_primitive_element() {
+        let modulus = modulus_x2_minus_3();
+        // Search for a primitive element
+        // In F_{17^2}, the group order is 288 = 2^5 * 3^2
+        // We need to find an element of order 288
+
+        // Try x + 1
+        let candidate = Ext2::new([F17::ONE, F17::ONE]);
+        let order = candidate.order(&modulus).unwrap();
+
+        // Verify the order is correct
+        assert_eq!(candidate.pow_mod(order, &modulus), Ext2::one());
+        // And no smaller power works
+        if order > 1 {
+            assert_ne!(candidate.pow_mod(order / 2, &modulus), Ext2::one());
+        }
+    }
+
+    #[test]
+    fn minimal_poly_degree3() {
+        let modulus = modulus_cubic();
+        type Ext3 = ExtField<17, 3>;
+
+        // For the generator x in a degree-3 extension
+        let alpha = Ext3::new([F17::ZERO, F17::ONE, F17::ZERO]);
+        let min_poly = alpha.minimal_polynomial(&modulus);
+
+        // Minimal poly should have degree 3 (same as extension degree for generator)
+        assert_eq!(min_poly.degree(), Some(3));
+        // α should be a root
+        assert_eq!(alpha.eval_poly(&min_poly, &modulus), Ext3::zero());
     }
 }
 
