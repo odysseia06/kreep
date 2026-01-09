@@ -36,8 +36,12 @@ fn main() {
 ## Running Examples
 
 ```bash
-cargo run --example f17
-cargo run --example playground
+cargo run --example field_basics       # Fp arithmetic, sqrt, discrete log
+cargo run --example poly_arithmetic    # Polynomial operations, GCD
+cargo run --example irreducible_polys  # Irreducibility and primitivity
+cargo run --example extension_fields   # ExtField and GF wrapper
+cargo run --example ntt_mul            # NTT polynomial multiplication
+cargo run --example factorization --features rand  # Polynomial factorization
 ```
 
 ## Running Tests
