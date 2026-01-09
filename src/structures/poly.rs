@@ -2786,3 +2786,44 @@ mod tests {
         assert!(roots.is_empty());
     }
 }
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    type F17 = Fp<17>;
+    type P17 = Poly<17>;
+
+    #[test]
+    fn serialize_poly() {
+        let p = P17::new(vec![F17::new(3), F17::new(2), F17::new(1)]);
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, "[3,2,1]");
+    }
+
+    #[test]
+    fn deserialize_poly() {
+        let p: P17 = serde_json::from_str("[3,2,1]").unwrap();
+        assert_eq!(p.degree(), Some(2));
+        assert_eq!(p.coeff(0), F17::new(3));
+        assert_eq!(p.coeff(1), F17::new(2));
+        assert_eq!(p.coeff(2), F17::new(1));
+    }
+
+    #[test]
+    fn roundtrip_poly() {
+        let p = P17::new(vec![F17::new(5), F17::new(0), F17::new(7), F17::new(1)]);
+        let json = serde_json::to_string(&p).unwrap();
+        let q: P17 = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, q);
+    }
+
+    #[test]
+    fn roundtrip_zero() {
+        let p = P17::zero();
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, "[]");
+        let q: P17 = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, q);
+    }
+}

@@ -830,8 +830,15 @@ impl<const P: u64, const D: usize> GFWithModulus<P, D> {
 
     /// Convert back to a GF element.
     ///
-    /// This validates and creates the modulus. Returns an error if the modulus
-    /// is invalid (wrong degree or not monic) or if coeffs has wrong length.
+    /// This validates degree and monic properties of the modulus, but does NOT
+    /// check irreducibility (uses `Modulus::new_unchecked` internally).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `coeffs` has wrong length (not equal to `D`)
+    /// - The modulus polynomial has wrong degree (not equal to `D`)
+    /// - The modulus polynomial is not monic
     pub fn to_gf(&self) -> Result<GF<P, D>, ModulusError> {
         if self.coeffs.len() != D {
             return Err(ModulusError::WrongDegree {
@@ -853,13 +860,23 @@ impl<const P: u64, const D: usize> GFWithModulus<P, D> {
     }
 }
 
+/// Serialize a GF element as its coefficients only.
+///
+/// Note: `GF` implements `Serialize` but NOT `Deserialize`. This is intentional
+/// because deserializing a `GF` element requires a modulus, which cannot be
+/// inferred from the serialized data alone.
+///
+/// For full round-trip serialization, use [`GFWithModulus`] which includes
+/// the modulus in the serialized form.
+///
+/// For deserializing coefficients when you already have the modulus, deserialize
+/// as `Vec<u64>` and construct the `GF` manually.
 #[cfg(feature = "serde")]
 impl<const P: u64, const D: usize> serde::Serialize for GF<P, D> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        // Serialize coefficients only; caller must provide modulus for deserialization
         let values: Vec<u64> = (0..D).map(|i| self.elem().coeff(i).value()).collect();
         values.serialize(serializer)
     }
@@ -1213,5 +1230,93 @@ mod tests {
             assert!(poly.is_primitive());
             assert_eq!(poly.degree(), Some(2));
         }
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    type F17 = Fp<17>;
+
+    fn make_modulus() -> Rc<Modulus<17, 2>> {
+        Rc::new(Modulus::new_unchecked(irreducible_poly_deg2::<17>()).unwrap())
+    }
+
+    #[test]
+    fn serialize_gf() {
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(5), F17::new(7)], modulus);
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(json, "[5,7]");
+    }
+
+    #[test]
+    fn gf_with_modulus_from_gf() {
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(5), F17::new(7)], modulus);
+
+        let with_mod = GFWithModulus::from_gf(&a);
+        assert_eq!(with_mod.coeffs, vec![5, 7]);
+        assert_eq!(with_mod.modulus.len(), 3); // degree 2 polynomial has 3 coeffs
+    }
+
+    #[test]
+    fn gf_with_modulus_roundtrip() {
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(5), F17::new(7)], modulus);
+
+        let with_mod = GFWithModulus::from_gf(&a);
+        let json = serde_json::to_string(&with_mod).unwrap();
+
+        let with_mod2: GFWithModulus<17, 2> = serde_json::from_str(&json).unwrap();
+        let b = with_mod2.to_gf().unwrap();
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn gf_with_modulus_preserves_arithmetic() {
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], Rc::clone(&modulus));
+        let b = GF::<17, 2>::new([F17::new(1), F17::new(1)], modulus);
+
+        // Serialize and deserialize
+        let a_with = GFWithModulus::from_gf(&a);
+        let b_with = GFWithModulus::from_gf(&b);
+
+        let a_json = serde_json::to_string(&a_with).unwrap();
+        let b_json = serde_json::to_string(&b_with).unwrap();
+
+        let a2 = serde_json::from_str::<GFWithModulus<17, 2>>(&a_json)
+            .unwrap()
+            .to_gf()
+            .unwrap();
+        let b2 = serde_json::from_str::<GFWithModulus<17, 2>>(&b_json)
+            .unwrap()
+            .to_gf()
+            .unwrap();
+
+        // Verify arithmetic still works
+        let prod_orig = &a * &b;
+        let prod_deser = &a2 * &b2;
+        assert_eq!(prod_orig, prod_deser);
+    }
+
+    #[test]
+    fn gf_with_modulus_wrong_coeffs_length_fails() {
+        let json = r#"{"coeffs":[1,2,3],"modulus":[14,0,1]}"#;
+        let with_mod: GFWithModulus<17, 2> = serde_json::from_str(json).unwrap();
+        let result = with_mod.to_gf();
+        assert!(matches!(result, Err(ModulusError::WrongDegree { .. })));
+    }
+
+    #[test]
+    fn gf_with_modulus_wrong_modulus_degree_fails() {
+        // modulus has degree 3, but we expect degree 2
+        let json = r#"{"coeffs":[1,2],"modulus":[1,0,0,1]}"#;
+        let with_mod: GFWithModulus<17, 2> = serde_json::from_str(json).unwrap();
+        let result = with_mod.to_gf();
+        assert!(matches!(result, Err(ModulusError::WrongDegree { .. })));
     }
 }

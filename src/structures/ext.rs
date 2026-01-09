@@ -1444,3 +1444,50 @@ mod tests {
         assert!(s.contains("y"));
     }
 }
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    type F17 = Fp<17>;
+    type Ext2 = ExtField<17, 2>;
+    type Ext3 = ExtField<17, 3>;
+
+    #[test]
+    fn serialize_extfield() {
+        let a = Ext2::new([F17::new(2), F17::new(3)]);
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(json, "[2,3]");
+    }
+
+    #[test]
+    fn deserialize_extfield() {
+        let a: Ext2 = serde_json::from_str("[5,7]").unwrap();
+        assert_eq!(a.coeff(0), F17::new(5));
+        assert_eq!(a.coeff(1), F17::new(7));
+    }
+
+    #[test]
+    fn roundtrip_extfield() {
+        let a = Ext3::new([F17::new(1), F17::new(2), F17::new(3)]);
+        let json = serde_json::to_string(&a).unwrap();
+        let b: Ext3 = serde_json::from_str(&json).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn deserialize_wrong_length_fails() {
+        // 3 elements for Ext2 which expects 2
+        let result: Result<Ext2, _> = serde_json::from_str("[1,2,3]");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn roundtrip_zero() {
+        let a = Ext2::zero();
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(json, "[0,0]");
+        let b: Ext2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(a, b);
+    }
+}
