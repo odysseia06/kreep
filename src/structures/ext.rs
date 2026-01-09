@@ -558,9 +558,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
             factors.push((2, exp));
         }
 
-        // Check odd factors
+        // Check odd factors (use d <= n / d to avoid overflow)
         let mut d = 3u64;
-        while d * d <= n {
+        while d <= n / d {
             if n % d == 0 {
                 let mut exp = 0;
                 while n % d == 0 {
