@@ -829,12 +829,18 @@ impl<const P: u64, const D1: usize, const D2: usize> Mul for &TowerGF<P, D1, D2>
     }
 }
 
+/// # Panics
+///
+/// Panics if the divisor is zero, or if D2 != 2 (inverse not implemented
+/// for higher-degree tower extensions).
 impl<const P: u64, const D1: usize, const D2: usize> Div for TowerGF<P, D1, D2> {
     type Output = Self;
 
     fn div(self, rhs: Self) -> Self::Output {
         self.assert_same_modulus(&rhs);
-        let rhs_inv = rhs.inverse().expect("division by zero");
+        let rhs_inv = rhs
+            .inverse()
+            .expect("division failed: zero divisor or unsupported tower degree (D2 != 2)");
         Self {
             elem: self.elem.mul_mod(
                 &rhs_inv.elem,
@@ -846,12 +852,18 @@ impl<const P: u64, const D1: usize, const D2: usize> Div for TowerGF<P, D1, D2> 
     }
 }
 
+/// # Panics
+///
+/// Panics if the divisor is zero, or if D2 != 2 (inverse not implemented
+/// for higher-degree tower extensions).
 impl<const P: u64, const D1: usize, const D2: usize> Div for &TowerGF<P, D1, D2> {
     type Output = TowerGF<P, D1, D2>;
 
     fn div(self, rhs: Self) -> Self::Output {
         self.assert_same_modulus(rhs);
-        let rhs_inv = rhs.inverse().expect("division by zero");
+        let rhs_inv = rhs
+            .inverse()
+            .expect("division failed: zero divisor or unsupported tower degree (D2 != 2)");
         TowerGF {
             elem: self.elem.mul_mod(
                 &rhs_inv.elem,
