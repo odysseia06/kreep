@@ -705,6 +705,44 @@ impl<const P: u64, const D1: usize, const D2: usize> Default for TowerField<P, D
     }
 }
 
+// ============================================================================
+// Serde implementations
+// ============================================================================
+
+#[cfg(feature = "serde")]
+impl<const P: u64, const D: usize> serde::Serialize for ExtField<P, D> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize as an array of coefficient values
+        let values: Vec<u64> = self.coeffs.iter().map(|c| c.value()).collect();
+        values.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const P: u64, const D: usize> serde::Deserialize<'de> for ExtField<P, D> {
+    fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
+    where
+        De: serde::Deserializer<'de>,
+    {
+        let values = Vec::<u64>::deserialize(deserializer)?;
+        if values.len() != D {
+            return Err(serde::de::Error::custom(format!(
+                "expected {} coefficients, got {}",
+                D,
+                values.len()
+            )));
+        }
+        let mut coeffs = [Fp::ZERO; D];
+        for (i, v) in values.into_iter().enumerate() {
+            coeffs[i] = Fp::new(v);
+        }
+        Ok(Self::new(coeffs))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -776,6 +776,95 @@ fn is_primitive_root<const P: u64>(g: Fp<P>) -> bool {
     true
 }
 
+// ============================================================================
+// Serde implementations
+// ============================================================================
+
+/// A self-contained serializable representation of a GF element with its modulus.
+///
+/// This is useful when you need to serialize a GF element along with its modulus
+/// so that it can be deserialized without external context.
+///
+/// # Example
+///
+/// ```
+/// use kreep::gf::{GF, Modulus, GFWithModulus, irreducible_poly_deg2};
+/// use kreep::Fp;
+/// use std::rc::Rc;
+///
+/// type F17 = Fp<17>;
+///
+/// let modulus = Rc::new(Modulus::<17, 2>::new_unchecked(irreducible_poly_deg2::<17>()).unwrap());
+/// let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
+///
+/// // Convert to self-contained form
+/// let with_mod = GFWithModulus::from_gf(&a);
+///
+/// // Convert back (requires validation)
+/// let b = with_mod.to_gf().unwrap();
+/// assert_eq!(a, b);
+/// ```
+#[cfg(feature = "serde")]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct GFWithModulus<const P: u64, const D: usize> {
+    /// Coefficients of the element (should have exactly D elements)
+    coeffs: Vec<u64>,
+    /// Coefficients of the modulus polynomial (degree D, so D+1 coefficients)
+    modulus: Vec<u64>,
+}
+
+#[cfg(feature = "serde")]
+impl<const P: u64, const D: usize> GFWithModulus<P, D> {
+    /// Create from a GF element.
+    pub fn from_gf(gf: &GF<P, D>) -> Self {
+        let coeffs = (0..D).map(|i| gf.elem().coeff(i).value()).collect();
+        let modulus = gf
+            .modulus()
+            .poly()
+            .coefficients()
+            .iter()
+            .map(|c| c.value())
+            .collect();
+        Self { coeffs, modulus }
+    }
+
+    /// Convert back to a GF element.
+    ///
+    /// This validates and creates the modulus. Returns an error if the modulus
+    /// is invalid (wrong degree or not monic) or if coeffs has wrong length.
+    pub fn to_gf(&self) -> Result<GF<P, D>, ModulusError> {
+        if self.coeffs.len() != D {
+            return Err(ModulusError::WrongDegree {
+                expected: D,
+                got: Some(self.coeffs.len()),
+            });
+        }
+
+        let poly_coeffs: Vec<Fp<P>> = self.modulus.iter().map(|&v| Fp::new(v)).collect();
+        let poly = Poly::new(poly_coeffs);
+        let modulus = Modulus::new_unchecked(poly)?;
+
+        let mut coeffs = [Fp::ZERO; D];
+        for (i, &v) in self.coeffs.iter().enumerate() {
+            coeffs[i] = Fp::new(v);
+        }
+
+        Ok(GF::new(coeffs, Rc::new(modulus)))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<const P: u64, const D: usize> serde::Serialize for GF<P, D> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize coefficients only; caller must provide modulus for deserialization
+        let values: Vec<u64> = (0..D).map(|i| self.elem().coeff(i).value()).collect();
+        values.serialize(serializer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

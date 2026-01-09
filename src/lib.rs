@@ -10,6 +10,8 @@ pub use structures::ext::ExtField;
 pub use structures::ext::TowerField;
 pub use structures::fp::Fp;
 pub use structures::gf;
+#[cfg(feature = "serde")]
+pub use structures::gf::GFWithModulus;
 pub use structures::gf::{Modulus, ModulusError};
 pub use structures::ntt;
 pub use structures::poly::Poly;

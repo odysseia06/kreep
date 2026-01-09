@@ -1363,6 +1363,30 @@ impl<const P: u64> fmt::Display for Poly<P> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<const P: u64> serde::Serialize for Poly<P> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize as a vector of coefficient values
+        let values: Vec<u64> = self.coeffs.iter().map(|c| c.value()).collect();
+        values.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const P: u64> serde::Deserialize<'de> for Poly<P> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let values = Vec::<u64>::deserialize(deserializer)?;
+        let coeffs = values.into_iter().map(Fp::new).collect();
+        Ok(Self::new(coeffs))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
