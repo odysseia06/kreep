@@ -8,6 +8,9 @@
 //!
 //! Run with: cargo run --example extension_fields
 
+use std::rc::Rc;
+
+use kreep::gf::Modulus;
 use kreep::{gf, ExtField, Fp, Poly, Ring};
 
 type F17 = Fp<17>;
@@ -78,16 +81,17 @@ fn extfield_basics() {
 fn gf_wrapper() {
     println!("--- GF Wrapper (High-Level API) ---\n");
 
-    // Get standard irreducible polynomial for F_17^2
-    let modulus = gf::irreducible_poly_deg2::<17>();
+    // Get standard irreducible polynomial for F_17^2 and wrap in validated Modulus
+    let poly = gf::irreducible_poly_deg2::<17>();
+    let modulus = Rc::new(Modulus::<17, 2>::new_unchecked(poly).unwrap());
     println!("Modulus: {:?}", modulus);
     println!();
 
     // Create GF elements - modulus is bundled with the element
     type GF17_2 = gf::GF<17, 2>;
 
-    let a = GF17_2::new([F17::new(2), F17::new(3)], modulus.clone());
-    let b = GF17_2::new([F17::new(1), F17::new(1)], modulus.clone());
+    let a = GF17_2::new([F17::new(2), F17::new(3)], Rc::clone(&modulus));
+    let b = GF17_2::new([F17::new(1), F17::new(1)], Rc::clone(&modulus));
 
     println!("a = {}", a);
     println!("b = {}", b);
@@ -122,11 +126,12 @@ fn gf_wrapper() {
 fn frobenius_norm_trace() {
     println!("--- Frobenius, Norm, and Trace ---\n");
 
-    let modulus = gf::irreducible_poly_deg2::<17>();
+    let poly = gf::irreducible_poly_deg2::<17>();
+    let modulus = Rc::new(Modulus::<17, 2>::new_unchecked(poly).unwrap());
     type GF17_2 = gf::GF<17, 2>;
 
     // Base field element
-    let base = GF17_2::from_base(F17::new(5), modulus.clone());
+    let base = GF17_2::from_base(F17::new(5), Rc::clone(&modulus));
     println!("Base field element: c = {}", base);
     println!(
         "  Frobenius(c) = {} (identity for base field)",
@@ -137,7 +142,7 @@ fn frobenius_norm_trace() {
     println!();
 
     // Extension field element
-    let a = GF17_2::new([F17::new(2), F17::new(3)], modulus.clone());
+    let a = GF17_2::new([F17::new(2), F17::new(3)], Rc::clone(&modulus));
     println!("Extension element: a = {}", a);
 
     // Frobenius: x -> x^p
@@ -156,7 +161,7 @@ fn frobenius_norm_trace() {
 
     // Verify: norm = a * a^p, and the result should be in the base field
     let norm_check = &a * &a_frob;
-    let norm_as_gf = GF17_2::from_base(norm, modulus.clone());
+    let norm_as_gf = GF17_2::from_base(norm, Rc::clone(&modulus));
     println!("  Verify: a * Frobenius(a) = {}", norm_check);
     println!("  Matches Norm(a)? {}", norm_check == norm_as_gf);
     println!();
@@ -167,7 +172,7 @@ fn frobenius_norm_trace() {
 
     // Verify: trace = a + a^p, and the result should be in the base field
     let trace_check = &a + &a_frob;
-    let trace_as_gf = GF17_2::from_base(trace, modulus.clone());
+    let trace_as_gf = GF17_2::from_base(trace, Rc::clone(&modulus));
     println!("  Verify: a + Frobenius(a) = {}", trace_check);
     println!("  Matches Trace(a)? {}", trace_check == trace_as_gf);
 }

@@ -1,10 +1,11 @@
 //! Finite field constructors and standard irreducible polynomials.
 //!
 //! This module provides:
-//! - Helper functions to construct common finite fields with automatically
-//!   selected irreducible polynomials
+//! - The `Modulus` struct for validated irreducible polynomials
 //! - The `GF` struct for working with extension field elements that bundles
 //!   the element with its modulus
+//! - Helper functions to construct common finite fields with automatically
+//!   selected irreducible polynomials
 
 use core::fmt;
 use core::ops::{Add, Div, Mul, Neg, Sub};
@@ -15,6 +16,149 @@ use crate::structures::ext::ExtField;
 use crate::structures::fp::Fp;
 use crate::structures::poly::Poly;
 use crate::utils::gcd;
+
+// ============================================================================
+// Modulus type for validated irreducible polynomials
+// ============================================================================
+
+/// Error type for modulus validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModulusError {
+    /// The polynomial has the wrong degree.
+    WrongDegree { expected: usize, got: Option<usize> },
+    /// The polynomial is not monic.
+    NotMonic,
+    /// The polynomial is not irreducible.
+    NotIrreducible,
+}
+
+impl fmt::Display for ModulusError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModulusError::WrongDegree { expected, got } => {
+                write!(f, "wrong degree: expected {}, got {:?}", expected, got)
+            }
+            ModulusError::NotMonic => write!(f, "polynomial is not monic"),
+            ModulusError::NotIrreducible => write!(f, "polynomial is not irreducible"),
+        }
+    }
+}
+
+impl std::error::Error for ModulusError {}
+
+/// A validated irreducible polynomial for use as a field modulus.
+///
+/// This struct wraps a polynomial that has been validated to be:
+/// - Of the correct degree `D`
+/// - Monic (leading coefficient is 1)
+/// - Irreducible (when using `new()`)
+///
+/// Using `Modulus` instead of raw `Poly` prevents accidental use of
+/// reducible or wrong-degree polynomials as field moduli.
+///
+/// # Example
+///
+/// ```
+/// use kreep::gf::{Modulus, irreducible_poly_deg2};
+/// use kreep::Poly;
+///
+/// // Create a validated modulus from a known irreducible polynomial
+/// let poly = irreducible_poly_deg2::<17>();
+/// let modulus: Modulus<17, 2> = Modulus::new(poly).unwrap();
+///
+/// // Or skip irreducibility check for trusted polynomials
+/// let poly2 = irreducible_poly_deg2::<17>();
+/// let modulus2: Modulus<17, 2> = Modulus::new_unchecked(poly2).unwrap();
+/// ```
+#[derive(Clone, PartialEq, Eq)]
+pub struct Modulus<const P: u64, const D: usize> {
+    poly: Poly<P>,
+}
+
+impl<const P: u64, const D: usize> Modulus<P, D> {
+    /// Create a new validated modulus.
+    ///
+    /// This validates that the polynomial is:
+    /// - Of degree exactly `D`
+    /// - Monic
+    /// - Irreducible
+    ///
+    /// # Errors
+    ///
+    /// Returns `ModulusError::WrongDegree` if the degree is not `D`.
+    /// Returns `ModulusError::NotMonic` if the leading coefficient is not 1.
+    /// Returns `ModulusError::NotIrreducible` if the polynomial is reducible.
+    pub fn new(poly: Poly<P>) -> Result<Self, ModulusError> {
+        // Check degree
+        if poly.degree() != Some(D) {
+            return Err(ModulusError::WrongDegree {
+                expected: D,
+                got: poly.degree(),
+            });
+        }
+
+        // Check monic
+        if poly.leading_coeff() != Some(Fp::ONE) {
+            return Err(ModulusError::NotMonic);
+        }
+
+        // Check irreducibility
+        if !poly.is_irreducible() {
+            return Err(ModulusError::NotIrreducible);
+        }
+
+        Ok(Self { poly })
+    }
+
+    /// Create a new modulus, skipping the irreducibility check.
+    ///
+    /// This still validates degree and monic properties, but skips the
+    /// expensive irreducibility test. Use this when you know the polynomial
+    /// is irreducible (e.g., from `irreducible_poly_deg2` or similar).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ModulusError::WrongDegree` if the degree is not `D`.
+    /// Returns `ModulusError::NotMonic` if the leading coefficient is not 1.
+    pub fn new_unchecked(poly: Poly<P>) -> Result<Self, ModulusError> {
+        // Check degree
+        if poly.degree() != Some(D) {
+            return Err(ModulusError::WrongDegree {
+                expected: D,
+                got: poly.degree(),
+            });
+        }
+
+        // Check monic
+        if poly.leading_coeff() != Some(Fp::ONE) {
+            return Err(ModulusError::NotMonic);
+        }
+
+        Ok(Self { poly })
+    }
+
+    /// Get a reference to the underlying polynomial.
+    pub fn poly(&self) -> &Poly<P> {
+        &self.poly
+    }
+
+    /// Get the degree of the modulus (always `D`).
+    pub const fn degree(&self) -> usize {
+        D
+    }
+}
+
+impl<const P: u64, const D: usize> fmt::Debug for Modulus<P, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Modulus({:?})", self.poly)
+    }
+}
+
+impl<const P: u64, const D: usize> fmt::Display for Modulus<P, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.poly)
+    }
+}
 
 /// A finite field element GF(p^d) with its modulus.
 ///
@@ -28,17 +172,18 @@ use crate::utils::gcd;
 /// # Example
 ///
 /// ```
-/// use kreep::gf::{GF, irreducible_poly_deg2};
+/// use kreep::gf::{GF, Modulus, irreducible_poly_deg2};
 /// use kreep::Fp;
+/// use std::rc::Rc;
 ///
 /// type F17 = Fp<17>;
 ///
-/// // Create a field GF(17^2)
-/// let modulus = irreducible_poly_deg2::<17>();
+/// // Create a validated modulus for GF(17^2)
+/// let modulus = Rc::new(Modulus::<17, 2>::new_unchecked(irreducible_poly_deg2::<17>()).unwrap());
 ///
 /// // Create elements
-/// let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus.clone());
-/// let b = GF::<17, 2>::new([F17::new(1), F17::new(1)], modulus);
+/// let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], Rc::clone(&modulus));
+/// let b = GF::<17, 2>::new([F17::new(1), F17::new(1)], Rc::clone(&modulus));
 ///
 /// // Arithmetic works naturally
 /// let c = &a * &b;
@@ -51,36 +196,20 @@ use crate::utils::gcd;
 #[derive(Clone)]
 pub struct GF<const P: u64, const D: usize> {
     elem: ExtField<P, D>,
-    modulus: Rc<Poly<P>>,
+    modulus: Rc<Modulus<P, D>>,
 }
 
 impl<const P: u64, const D: usize> GF<P, D> {
-    /// Create a new field element from coefficients and modulus.
-    pub fn new(coeffs: [Fp<P>; D], modulus: Poly<P>) -> Self {
-        Self {
-            elem: ExtField::new(coeffs),
-            modulus: Rc::new(modulus),
-        }
-    }
-
-    /// Create a new field element with a shared modulus.
-    pub fn new_with_shared(coeffs: [Fp<P>; D], modulus: Rc<Poly<P>>) -> Self {
+    /// Create a new field element from coefficients and a shared modulus.
+    pub fn new(coeffs: [Fp<P>; D], modulus: Rc<Modulus<P, D>>) -> Self {
         Self {
             elem: ExtField::new(coeffs),
             modulus,
         }
     }
 
-    /// Create a new field element from an ExtField and modulus.
-    pub fn from_ext(elem: ExtField<P, D>, modulus: Poly<P>) -> Self {
-        Self {
-            elem,
-            modulus: Rc::new(modulus),
-        }
-    }
-
-    /// Create a new field element from an ExtField with a shared modulus.
-    pub fn from_ext_shared(elem: ExtField<P, D>, modulus: Rc<Poly<P>>) -> Self {
+    /// Create a new field element from an ExtField and a shared modulus.
+    pub fn from_ext(elem: ExtField<P, D>, modulus: Rc<Modulus<P, D>>) -> Self {
         Self { elem, modulus }
     }
 
@@ -108,16 +237,8 @@ impl<const P: u64, const D: usize> GF<P, D> {
         })
     }
 
-    /// Create a field element from a base field element.
-    pub fn from_base(c: Fp<P>, modulus: Poly<P>) -> Self {
-        Self {
-            elem: ExtField::from_base(c),
-            modulus: Rc::new(modulus),
-        }
-    }
-
-    /// Create a field element from a base field element with shared modulus.
-    pub fn from_base_shared(c: Fp<P>, modulus: Rc<Poly<P>>) -> Self {
+    /// Create a field element from a base field element with a shared modulus.
+    pub fn from_base(c: Fp<P>, modulus: Rc<Modulus<P, D>>) -> Self {
         Self {
             elem: ExtField::from_base(c),
             modulus,
@@ -129,13 +250,13 @@ impl<const P: u64, const D: usize> GF<P, D> {
         &self.elem
     }
 
-    /// Get the modulus polynomial.
-    pub fn modulus(&self) -> &Poly<P> {
+    /// Get the modulus.
+    pub fn modulus(&self) -> &Modulus<P, D> {
         &self.modulus
     }
 
     /// Get the shared modulus reference.
-    pub fn modulus_rc(&self) -> Rc<Poly<P>> {
+    pub fn modulus_rc(&self) -> Rc<Modulus<P, D>> {
         Rc::clone(&self.modulus)
     }
 
@@ -156,7 +277,7 @@ impl<const P: u64, const D: usize> GF<P, D> {
 
     /// Compute the multiplicative inverse.
     pub fn inverse(&self) -> Option<Self> {
-        self.elem.inverse_mod(&self.modulus).map(|inv| Self {
+        self.elem.inverse_mod(self.modulus.poly()).map(|inv| Self {
             elem: inv,
             modulus: Rc::clone(&self.modulus),
         })
@@ -165,7 +286,7 @@ impl<const P: u64, const D: usize> GF<P, D> {
     /// Compute self^exp.
     pub fn pow(&self, exp: u64) -> Self {
         Self {
-            elem: self.elem.pow_mod(exp, &self.modulus),
+            elem: self.elem.pow_mod(exp, self.modulus.poly()),
             modulus: Rc::clone(&self.modulus),
         }
     }
@@ -173,19 +294,19 @@ impl<const P: u64, const D: usize> GF<P, D> {
     /// Frobenius endomorphism: x -> x^p.
     pub fn frobenius(&self) -> Self {
         Self {
-            elem: self.elem.frobenius(&self.modulus),
+            elem: self.elem.frobenius(self.modulus.poly()),
             modulus: Rc::clone(&self.modulus),
         }
     }
 
     /// Compute the norm to the base field.
     pub fn norm(&self) -> Fp<P> {
-        self.elem.norm(&self.modulus)
+        self.elem.norm(self.modulus.poly())
     }
 
     /// Compute the trace to the base field.
     pub fn trace(&self) -> Fp<P> {
-        self.elem.trace(&self.modulus)
+        self.elem.trace(self.modulus.poly())
     }
 
     /// Assert that two elements share the same modulus.
@@ -194,7 +315,8 @@ impl<const P: u64, const D: usize> GF<P, D> {
     /// to prevent silent cross-field mixing.
     fn assert_same_modulus(&self, other: &Self) {
         assert!(
-            Rc::ptr_eq(&self.modulus, &other.modulus) || *self.modulus == *other.modulus,
+            Rc::ptr_eq(&self.modulus, &other.modulus)
+                || self.modulus.poly() == other.modulus.poly(),
             "GF elements must have the same modulus"
         );
     }
@@ -276,7 +398,7 @@ impl<const P: u64, const D: usize> Mul for GF<P, D> {
     fn mul(self, rhs: Self) -> Self::Output {
         self.assert_same_modulus(&rhs);
         Self {
-            elem: self.elem.mul_mod(&rhs.elem, &self.modulus),
+            elem: self.elem.mul_mod(&rhs.elem, self.modulus.poly()),
             modulus: self.modulus,
         }
     }
@@ -288,7 +410,7 @@ impl<const P: u64, const D: usize> Mul for &GF<P, D> {
     fn mul(self, rhs: Self) -> Self::Output {
         self.assert_same_modulus(rhs);
         GF {
-            elem: self.elem.mul_mod(&rhs.elem, &self.modulus),
+            elem: self.elem.mul_mod(&rhs.elem, self.modulus.poly()),
             modulus: Rc::clone(&self.modulus),
         }
     }
@@ -301,7 +423,7 @@ impl<const P: u64, const D: usize> Div for GF<P, D> {
         self.assert_same_modulus(&rhs);
         let rhs_inv = rhs.inverse().expect("division by zero");
         Self {
-            elem: self.elem.mul_mod(&rhs_inv.elem, &self.modulus),
+            elem: self.elem.mul_mod(&rhs_inv.elem, self.modulus.poly()),
             modulus: self.modulus,
         }
     }
@@ -314,7 +436,7 @@ impl<const P: u64, const D: usize> Div for &GF<P, D> {
         self.assert_same_modulus(rhs);
         let rhs_inv = rhs.inverse().expect("division by zero");
         GF {
-            elem: self.elem.mul_mod(&rhs_inv.elem, &self.modulus),
+            elem: self.elem.mul_mod(&rhs_inv.elem, self.modulus.poly()),
             modulus: Rc::clone(&self.modulus),
         }
     }
@@ -323,7 +445,7 @@ impl<const P: u64, const D: usize> Div for &GF<P, D> {
 impl<const P: u64, const D: usize> PartialEq for GF<P, D> {
     fn eq(&self, other: &Self) -> bool {
         // Two elements are equal only if they have the same modulus and same coefficients
-        (Rc::ptr_eq(&self.modulus, &other.modulus) || *self.modulus == *other.modulus)
+        (Rc::ptr_eq(&self.modulus, &other.modulus) || self.modulus.poly() == other.modulus.poly())
             && self.elem == other.elem
     }
 }
@@ -658,13 +780,77 @@ fn is_primitive_root<const P: u64>(g: Fp<P>) -> bool {
 mod tests {
     use super::*;
 
+    // ---- Modulus tests ----
+
+    #[test]
+    fn modulus_new_valid() {
+        let poly = irreducible_poly_deg2::<17>();
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new(poly);
+        assert!(modulus.is_ok());
+    }
+
+    #[test]
+    fn modulus_new_wrong_degree() {
+        let poly = irreducible_poly_deg3::<17>();
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new(poly);
+        assert!(matches!(
+            modulus,
+            Err(ModulusError::WrongDegree {
+                expected: 2,
+                got: Some(3)
+            })
+        ));
+    }
+
+    #[test]
+    fn modulus_new_not_monic() {
+        // 2x^2 - 6 (not monic)
+        let poly = Poly::new(vec![Fp::<17>::new(11), Fp::ZERO, Fp::new(2)]);
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new(poly);
+        assert!(matches!(modulus, Err(ModulusError::NotMonic)));
+    }
+
+    #[test]
+    fn modulus_new_not_irreducible() {
+        // x^2 - 1 = (x-1)(x+1) is reducible
+        let poly = Poly::new(vec![Fp::<17>::new(16), Fp::ZERO, Fp::ONE]);
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new(poly);
+        assert!(matches!(modulus, Err(ModulusError::NotIrreducible)));
+    }
+
+    #[test]
+    fn modulus_new_unchecked_skips_irreducibility() {
+        // x^2 - 1 is reducible but new_unchecked should accept it
+        let poly = Poly::new(vec![Fp::<17>::new(16), Fp::ZERO, Fp::ONE]);
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new_unchecked(poly);
+        assert!(modulus.is_ok());
+    }
+
+    #[test]
+    fn modulus_new_unchecked_still_checks_degree() {
+        let poly = irreducible_poly_deg3::<17>();
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new_unchecked(poly);
+        assert!(matches!(modulus, Err(ModulusError::WrongDegree { .. })));
+    }
+
+    #[test]
+    fn modulus_new_unchecked_still_checks_monic() {
+        let poly = Poly::new(vec![Fp::<17>::new(11), Fp::ZERO, Fp::new(2)]);
+        let modulus: Result<Modulus<17, 2>, _> = Modulus::new_unchecked(poly);
+        assert!(matches!(modulus, Err(ModulusError::NotMonic)));
+    }
+
     // ---- GF struct tests ----
 
     type F17 = Fp<17>;
 
+    fn make_modulus() -> Rc<Modulus<17, 2>> {
+        Rc::new(Modulus::new_unchecked(irreducible_poly_deg2::<17>()).unwrap())
+    }
+
     #[test]
     fn gf_new_and_coeff() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(3), F17::new(5)], modulus);
         assert_eq!(a.coeff(0), F17::new(3));
         assert_eq!(a.coeff(1), F17::new(5));
@@ -672,7 +858,7 @@ mod tests {
 
     #[test]
     fn gf_zero_one() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(1), F17::new(2)], modulus);
 
         let zero = GF::zero_like(&a);
@@ -686,8 +872,8 @@ mod tests {
 
     #[test]
     fn gf_add() {
-        let modulus = irreducible_poly_deg2::<17>();
-        let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus.clone());
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], Rc::clone(&modulus));
         let b = GF::<17, 2>::new([F17::new(5), F17::new(7)], modulus);
 
         let c = &a + &b;
@@ -697,8 +883,8 @@ mod tests {
 
     #[test]
     fn gf_sub() {
-        let modulus = irreducible_poly_deg2::<17>();
-        let a = GF::<17, 2>::new([F17::new(5), F17::new(7)], modulus.clone());
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(5), F17::new(7)], Rc::clone(&modulus));
         let b = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
 
         let c = &a - &b;
@@ -708,7 +894,7 @@ mod tests {
 
     #[test]
     fn gf_neg() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
 
         let neg_a = -&a;
@@ -718,8 +904,8 @@ mod tests {
 
     #[test]
     fn gf_mul() {
-        let modulus = irreducible_poly_deg2::<17>();
-        let a = GF::<17, 2>::new([F17::new(1), F17::new(1)], modulus.clone());
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(1), F17::new(1)], Rc::clone(&modulus));
         let b = GF::<17, 2>::new([F17::new(1), F17::new(1)], modulus);
 
         // (1 + x)^2 = 1 + 2x + x^2
@@ -732,7 +918,7 @@ mod tests {
 
     #[test]
     fn gf_mul_identity() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
         let one = GF::one_like(&a);
 
@@ -741,7 +927,7 @@ mod tests {
 
     #[test]
     fn gf_inverse() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
 
         let a_inv = a.inverse().unwrap();
@@ -752,7 +938,7 @@ mod tests {
 
     #[test]
     fn gf_inverse_zero_fails() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
         let zero = GF::zero_like(&a);
 
@@ -761,8 +947,8 @@ mod tests {
 
     #[test]
     fn gf_div() {
-        let modulus = irreducible_poly_deg2::<17>();
-        let a = GF::<17, 2>::new([F17::new(6), F17::new(9)], modulus.clone());
+        let modulus = make_modulus();
+        let a = GF::<17, 2>::new([F17::new(6), F17::new(9)], Rc::clone(&modulus));
         let b = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
 
         let c = &a / &b;
@@ -773,7 +959,7 @@ mod tests {
 
     #[test]
     fn gf_pow() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], modulus);
 
         // a^0 = 1
@@ -788,7 +974,7 @@ mod tests {
 
     #[test]
     fn gf_pow_fermat() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(5), F17::new(7)], modulus);
 
         // In GF(17^2), a^{17^2 - 1} = 1 for all non-zero a
@@ -798,10 +984,10 @@ mod tests {
 
     #[test]
     fn gf_shared_modulus() {
-        let modulus = Rc::new(irreducible_poly_deg2::<17>());
+        let modulus = make_modulus();
 
-        let a = GF::<17, 2>::new_with_shared([F17::new(2), F17::new(3)], Rc::clone(&modulus));
-        let b = GF::<17, 2>::new_with_shared([F17::new(5), F17::new(7)], Rc::clone(&modulus));
+        let a = GF::<17, 2>::new([F17::new(2), F17::new(3)], Rc::clone(&modulus));
+        let b = GF::<17, 2>::new([F17::new(5), F17::new(7)], Rc::clone(&modulus));
 
         // Same Rc pointer
         assert!(Rc::ptr_eq(&a.modulus_rc(), &b.modulus_rc()));
@@ -813,7 +999,7 @@ mod tests {
 
     #[test]
     fn gf_frobenius() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(5), F17::new(0)], modulus);
 
         // For base field elements, Frobenius is identity
@@ -822,7 +1008,7 @@ mod tests {
 
     #[test]
     fn gf_display() {
-        let modulus = irreducible_poly_deg2::<17>();
+        let modulus = make_modulus();
         let a = GF::<17, 2>::new([F17::new(3), F17::new(5)], modulus);
 
         let s = format!("{}", a);

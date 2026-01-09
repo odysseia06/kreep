@@ -10,6 +10,7 @@ pub use structures::ext::ExtField;
 pub use structures::ext::TowerField;
 pub use structures::fp::Fp;
 pub use structures::gf;
+pub use structures::gf::{Modulus, ModulusError};
 pub use structures::ntt;
 pub use structures::poly::Poly;
 pub use utils::{ceil_sqrt_u64, gcd, is_prime};
