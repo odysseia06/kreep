@@ -7,9 +7,11 @@
 //! - Helper functions to construct common finite fields with automatically
 //!   selected irreducible polynomials
 
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::{Add, Div, Mul, Neg, Sub};
-use std::rc::Rc;
 
 use crate::algebra::ring::Ring;
 use crate::structures::ext::ExtField;
@@ -44,6 +46,7 @@ impl fmt::Display for ModulusError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for ModulusError {}
 
 /// A validated irreducible polynomial for use as a field modulus.
@@ -885,6 +888,7 @@ impl<const P: u64, const D: usize> serde::Serialize for GF<P, D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     // ---- Modulus tests ----
 

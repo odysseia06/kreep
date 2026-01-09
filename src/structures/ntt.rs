@@ -16,6 +16,9 @@
 //! - 2281701377 = 17 · 2²⁷ + 1 (max NTT size: 2²⁷)
 //! - 3221225473 = 3 · 2³⁰ + 1 (max NTT size: 2³⁰)
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
 use crate::structures::fp::Fp;

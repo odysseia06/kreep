@@ -1,3 +1,7 @@
+#[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
@@ -487,6 +491,8 @@ impl<const P: u64> Fp<P> {
     ///
     /// Returns `None` if any element is zero.
     ///
+    /// Requires the `alloc` feature.
+    ///
     /// # Example
     ///
     /// ```
@@ -501,6 +507,7 @@ impl<const P: u64> Fp<P> {
     ///     assert_eq!(*a * *a_inv, F17::ONE);
     /// }
     /// ```
+    #[cfg(feature = "alloc")]
     pub fn batch_inverse(elements: &[Self]) -> Option<Vec<Self>> {
         let n = elements.len();
         if n == 0 {
@@ -539,6 +546,8 @@ impl<const P: u64> Fp<P> {
     ///
     /// Returns `false` if any element is zero (slice unchanged).
     ///
+    /// Requires the `alloc` feature.
+    ///
     /// # Example
     ///
     /// ```
@@ -555,6 +564,7 @@ impl<const P: u64> Fp<P> {
     ///     assert_eq!(*a * *a_inv, F17::ONE);
     /// }
     /// ```
+    #[cfg(feature = "alloc")]
     pub fn batch_inverse_in_place(elements: &mut [Self]) -> bool {
         let n = elements.len();
         if n == 0 {
@@ -603,6 +613,8 @@ impl<const P: u64> Fp<P> {
     /// Uses baby-step giant-step algorithm with O(√n) time and space,
     /// where n is the group order.
     ///
+    /// Requires the `std` feature (uses `HashMap` internally).
+    ///
     /// # Example
     ///
     /// ```
@@ -615,6 +627,7 @@ impl<const P: u64> Fp<P> {
     /// let x = target.discrete_log(base).unwrap();
     /// assert_eq!(base.pow(x), target);
     /// ```
+    #[cfg(feature = "std")]
     pub fn discrete_log(self, base: Self) -> Option<u64> {
         self.discrete_log_with_order(base, P - 1)
     }
@@ -622,6 +635,8 @@ impl<const P: u64> Fp<P> {
     /// Compute discrete logarithm when the group order is known.
     ///
     /// This is more efficient when working in a proper subgroup of F_p^*.
+    ///
+    /// Requires the `std` feature (uses `HashMap` internally).
     ///
     /// # Arguments
     /// * `base` - The base of the logarithm
@@ -640,6 +655,7 @@ impl<const P: u64> Fp<P> {
     /// let x = target.discrete_log_with_order(base, 8).unwrap();
     /// assert_eq!(x, 3);
     /// ```
+    #[cfg(feature = "std")]
     pub fn discrete_log_with_order(self, base: Self, order: u64) -> Option<u64> {
         // Handle edge cases
         if base == Self::ZERO {
@@ -697,6 +713,8 @@ impl<const P: u64> Fp<P> {
     /// Returns the smallest positive integer `n` such that `self^n = 1`.
     /// Returns `None` if `self` is zero.
     ///
+    /// Requires the `alloc` feature.
+    ///
     /// # Example
     ///
     /// ```
@@ -709,6 +727,7 @@ impl<const P: u64> Fp<P> {
     /// assert_eq!(F17::new(1).multiplicative_order(), Some(1));
     /// assert_eq!(F17::new(16).multiplicative_order(), Some(2)); // 16 ≡ -1
     /// ```
+    #[cfg(feature = "alloc")]
     pub fn multiplicative_order(self) -> Option<u64> {
         if self == Self::ZERO {
             return None;
@@ -741,6 +760,7 @@ impl<const P: u64> Fp<P> {
     }
 
     /// Factor a u64 into prime factors with their multiplicities.
+    #[cfg(feature = "alloc")]
     fn factor_u64(mut n: u64) -> Vec<(u64, u32)> {
         let mut factors = Vec::new();
 
@@ -780,6 +800,8 @@ impl<const P: u64> Fp<P> {
     /// A primitive root has multiplicative order p-1, generating the
     /// entire multiplicative group F_p^*.
     ///
+    /// Requires the `alloc` feature.
+    ///
     /// # Example
     ///
     /// ```
@@ -790,6 +812,7 @@ impl<const P: u64> Fp<P> {
     /// assert!(F17::new(3).is_primitive_root());
     /// assert!(!F17::new(2).is_primitive_root()); // order 8, not 16
     /// ```
+    #[cfg(feature = "alloc")]
     pub fn is_primitive_root(self) -> bool {
         if self == Self::ZERO {
             return false;
@@ -812,6 +835,8 @@ impl<const P: u64> Fp<P> {
 
     /// Find the smallest primitive root modulo P.
     ///
+    /// Requires the `alloc` feature.
+    ///
     /// # Example
     ///
     /// ```
@@ -822,6 +847,7 @@ impl<const P: u64> Fp<P> {
     /// let g = F17::primitive_root().unwrap();
     /// assert!(g.is_primitive_root());
     /// ```
+    #[cfg(feature = "alloc")]
     pub fn primitive_root() -> Option<Self> {
         for a in 2..P {
             let elem = Self::new(a);

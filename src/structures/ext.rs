@@ -1,9 +1,14 @@
+#[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
 use crate::algebra::field::Field;
 use crate::algebra::ring::Ring;
 use crate::structures::fp::Fp;
+#[cfg(feature = "alloc")]
 use crate::structures::poly::Poly;
 
 /// Extension field F_p[x]/(f(x)) where f(x) is an irreducible polynomial of degree D.
@@ -109,6 +114,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     }
 
     /// Convert to a polynomial representation.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn to_poly(&self) -> Poly<P> {
         Poly::new(self.coeffs.to_vec())
     }
@@ -116,6 +124,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     /// Create from a polynomial, reducing if necessary.
     ///
     /// The polynomial is reduced modulo the given modulus.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn from_poly(p: &Poly<P>, modulus: &Poly<P>) -> Self {
         let reduced = p.rem(modulus).unwrap_or_else(Poly::zero);
         let mut coeffs = [Fp::ZERO; D];
@@ -130,6 +141,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     /// Multiply two extension field elements modulo the irreducible polynomial.
     ///
     /// This is the core operation for extension field arithmetic.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn mul_mod(&self, other: &Self, modulus: &Poly<P>) -> Self {
         let a_poly = self.to_poly();
         let b_poly = other.to_poly();
@@ -143,6 +157,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     /// then s*a + t*m = 1, so s*a ≡ 1 (mod m), meaning s is the inverse.
     ///
     /// Returns `None` if the element is zero.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn inverse_mod(&self, modulus: &Poly<P>) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -166,12 +183,18 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     }
 
     /// Divide by another element modulo the irreducible polynomial.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn div_mod(&self, other: &Self, modulus: &Poly<P>) -> Option<Self> {
         let inv = other.inverse_mod(modulus)?;
         Some(self.mul_mod(&inv, modulus))
     }
 
     /// Compute self^exp modulo the irreducible polynomial.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn pow_mod(&self, mut exp: u64, modulus: &Poly<P>) -> Self {
         if exp == 0 {
             return Self::one();
@@ -204,6 +227,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     /// Frobenius endomorphism: x -> x^p.
     ///
     /// In characteristic p, this is an automorphism of the extension field.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn frobenius(&self, modulus: &Poly<P>) -> Self {
         self.pow_mod(P, modulus)
     }
@@ -212,6 +238,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     ///
     /// For F_{p^d}/F_p, the norm is the product of all conjugates:
     /// N(a) = a * a^p * a^{p^2} * ... * a^{p^{d-1}}
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn norm(&self, modulus: &Poly<P>) -> Fp<P> {
         let mut result = *self;
         let mut conjugate = self.frobenius(modulus);
@@ -229,6 +258,9 @@ impl<const P: u64, const D: usize> ExtField<P, D> {
     ///
     /// For F_{p^d}/F_p, the trace is the sum of all conjugates:
     /// Tr(a) = a + a^p + a^{p^2} + ... + a^{p^{d-1}}
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn trace(&self, modulus: &Poly<P>) -> Fp<P> {
         let mut result = *self;
         let mut conjugate = self.frobenius(modulus);
@@ -296,8 +328,8 @@ impl<const P: u64, const D: usize> Mul<Fp<P>> for ExtField<P, D> {
 
 impl<const P: u64, const D: usize> fmt::Debug for ExtField<P, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Delegate to polynomial Debug format
-        write!(f, "{:?}", self.to_poly())
+        // Format as array of coefficients
+        write!(f, "ExtField{:?}", self.coeffs)
     }
 }
 
@@ -318,12 +350,16 @@ impl<const P: u64, const D: usize> Default for ExtField<P, D> {
 ///
 /// This is useful when you want to work with extension field elements
 /// using the standard Ring/Field trait operations.
+///
+/// Requires the `alloc` feature.
+#[cfg(feature = "alloc")]
 #[derive(Clone)]
 pub struct ExtFieldWithModulus<'a, const P: u64, const D: usize> {
     elem: ExtField<P, D>,
     modulus: &'a Poly<P>,
 }
 
+#[cfg(feature = "alloc")]
 impl<'a, const P: u64, const D: usize> ExtFieldWithModulus<'a, P, D> {
     /// Create a new extension field element with its modulus.
     pub fn new(elem: ExtField<P, D>, modulus: &'a Poly<P>) -> Self {
@@ -464,6 +500,9 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
     /// - `outer_mod`: Coefficients of the irreducible polynomial for F_{p^D1} → F_{p^{D1*D2}}
     ///   Given as D2 elements representing the non-leading coefficients
     ///   (the polynomial is monic, so the leading coefficient y^D2 is implicitly 1)
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn mul_mod(
         &self,
         other: &Self,
@@ -488,6 +527,7 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
     }
 
     /// Reduce a polynomial of degree < 2*D2-1 modulo the outer polynomial.
+    #[cfg(feature = "alloc")]
     fn reduce_tower(
         poly: &[ExtField<P, D1>],
         inner_mod: &Poly<P>,
@@ -530,6 +570,9 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
     /// where non_residue is the constant term of the outer modulus (negated).
     ///
     /// Returns `None` if the element is zero or if D2 != 2 (not yet implemented).
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn inverse_mod(&self, inner_mod: &Poly<P>, outer_mod: &[ExtField<P, D1>]) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -572,6 +615,9 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
     }
 
     /// Compute self^exp.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn pow_mod(
         &self,
         mut exp: u64,
@@ -597,6 +643,9 @@ impl<const P: u64, const D1: usize, const D2: usize> TowerField<P, D1, D2> {
     }
 
     /// Frobenius endomorphism: x -> x^p.
+    ///
+    /// Requires the `alloc` feature.
+    #[cfg(feature = "alloc")]
     pub fn frobenius(&self, inner_mod: &Poly<P>, outer_mod: &[ExtField<P, D1>]) -> Self {
         self.pow_mod(P, inner_mod, outer_mod)
     }
@@ -709,7 +758,7 @@ impl<const P: u64, const D1: usize, const D2: usize> Default for TowerField<P, D
 // Serde implementations
 // ============================================================================
 
-#[cfg(feature = "serde")]
+#[cfg(all(feature = "serde", feature = "alloc"))]
 impl<const P: u64, const D: usize> serde::Serialize for ExtField<P, D> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -721,7 +770,7 @@ impl<const P: u64, const D: usize> serde::Serialize for ExtField<P, D> {
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(all(feature = "serde", feature = "alloc"))]
 impl<'de, const P: u64, const D: usize> serde::Deserialize<'de> for ExtField<P, D> {
     fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
     where
@@ -729,7 +778,7 @@ impl<'de, const P: u64, const D: usize> serde::Deserialize<'de> for ExtField<P, 
     {
         let values = Vec::<u64>::deserialize(deserializer)?;
         if values.len() != D {
-            return Err(serde::de::Error::custom(format!(
+            return Err(serde::de::Error::custom(alloc::format!(
                 "expected {} coefficients, got {}",
                 D,
                 values.len()
@@ -746,6 +795,7 @@ impl<'de, const P: u64, const D: usize> serde::Deserialize<'de> for ExtField<P, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     type F17 = Fp<17>;
     type Ext2 = ExtField<17, 2>;
@@ -1073,14 +1123,14 @@ mod tests {
     fn debug_format() {
         let a = Ext2::new([F17::new(3), F17::new(5)]);
         let s = format!("{:?}", a);
-        assert_eq!(s, "3 + 5*x");
+        assert_eq!(s, "ExtField[Fp<17>(3), Fp<17>(5)]");
     }
 
     #[test]
     fn debug_format_zero() {
         let z = Ext2::zero();
         let s = format!("{:?}", z);
-        assert_eq!(s, "0");
+        assert_eq!(s, "ExtField[Fp<17>(0), Fp<17>(0)]");
     }
 
     // Degree 3 extension tests

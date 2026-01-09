@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
@@ -1480,6 +1482,7 @@ impl<'de, const P: u64> serde::Deserialize<'de> for Poly<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     type F17 = Fp<17>;
     type P17 = Poly<17>;
