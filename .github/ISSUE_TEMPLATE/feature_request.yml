@@ -12,6 +12,10 @@ body:
     id: priority
     attributes:
       label: Priority
+      description: >
+        P0 = blocks correctness or development.
+        P1 = important near-term improvement.
+        P2 = roadmap / long-horizon.
       options:
         - P0-correctness/blocker
         - P1-important
@@ -54,6 +58,27 @@ body:
     validations:
       required: true
   - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, testable conditions that must hold when this feature is complete.
+      placeholder: |
+        - `try_div` returns `Err` on zero divisor instead of panicking
+        - Existing `/` operator behavior is unchanged
+        - Docs include usage example
+    validations:
+      required: true
+  - type: textarea
+    id: nongoals
+    attributes:
+      label: Non-goals
+      description: What is explicitly out of scope for this issue?
+      placeholder: |
+        - Does not change the behavior of existing panic-based `/` operator
+        - Does not add checked division for `Fp` (already has `inverse()` returning `Option`)
+    validations:
+      required: false
+  - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
@@ -69,8 +94,9 @@ body:
     attributes:
       label: Definition of Done
       placeholder: |
-        - [ ] API finalized
-        - [ ] Tests and docs added
-        - [ ] Benchmarks (if perf-sensitive)
+        - [ ] API finalized and implemented
+        - [ ] Tests added (unit + integration)
+        - [ ] Docs and examples updated
+        - [ ] Benchmarks added (if perf-sensitive)
     validations:
       required: true

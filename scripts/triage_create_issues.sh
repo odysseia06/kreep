@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=true
+  echo "=== DRY RUN MODE (no changes will be made) ==="
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh CLI not found. Install from https://cli.github.com/"
   exit 1
 fi
 
-if ! gh auth status -h github.com >/dev/null 2>&1; then
+if [[ "$DRY_RUN" == false ]] && ! gh auth status -h github.com >/dev/null 2>&1; then
   echo "gh is not authenticated for github.com. Run: gh auth login"
   exit 1
 fi
@@ -28,7 +34,10 @@ if [[ ! -f "$BACKLOG_FILE" ]]; then
   exit 1
 fi
 
-"$ROOT_DIR/scripts/triage_create_labels.sh" >/dev/null
+# Ensure labels exist before creating issues
+if [[ "$DRY_RUN" == false ]]; then
+  "$ROOT_DIR/scripts/triage_create_labels.sh" >/dev/null
+fi
 
 mapfile -t titles < <(grep '^## ISSUE: ' "$BACKLOG_FILE" | sed 's/^## ISSUE: //')
 if [[ ${#titles[@]} -eq 0 ]]; then
@@ -36,34 +45,51 @@ if [[ ${#titles[@]} -eq 0 ]]; then
   exit 1
 fi
 
-existing_titles="$(gh issue list --repo "$REPO" --state all --limit 1000 --json title --jq '.[].title')"
-existing_milestones="$(gh api "repos/$REPO/milestones?state=all&per_page=100" --paginate --jq '.[].title' 2>/dev/null || true)"
+existing_titles=""
+existing_milestones=""
+if [[ "$DRY_RUN" == false ]]; then
+  existing_titles="$(gh issue list --repo "$REPO" --state all --limit 1000 --json title --jq '.[].title')"
+  existing_milestones="$(gh api "repos/$REPO/milestones?state=all&per_page=100" --paginate --jq '.[].title' 2>/dev/null || true)"
+fi
 
 mapfile -t needed_milestones < <(grep '^Milestone: ' "$BACKLOG_FILE" | sed 's/^Milestone: //' | sort -u)
 for m in "${needed_milestones[@]}"; do
   [[ -z "$m" ]] && continue
-  if grep -Fxq "$m" <<<"$existing_milestones"; then
+  if [[ -n "$existing_milestones" ]] && grep -Fxq "$m" <<<"$existing_milestones"; then
     continue
   fi
-  gh api --method POST "repos/$REPO/milestones" -f title="$m" -f state="open" >/dev/null
-  existing_milestones+=$'\n'"$m"
-  echo "create milestone: $m"
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "would create milestone: $m"
+  else
+    gh api --method POST "repos/$REPO/milestones" -f title="$m" -f state="open" >/dev/null
+    existing_milestones+=$'\n'"$m"
+    echo "create milestone: $m"
+  fi
 done
 
+# Extract the section for a given issue title.
+# Uses awk with index() to avoid regex interpretation of title characters.
 extract_section() {
   local title="$1"
-  awk -v t="$title" '
-    $0 == "## ISSUE: " t { in_section=1; next }
+  local header="## ISSUE: ${title}"
+  awk -v hdr="$header" '
+    BEGIN { in_section=0 }
+    { if ($0 == hdr) { in_section=1; next } }
     in_section && /^## ISSUE: / { exit }
     in_section { print }
   ' "$BACKLOG_FILE"
 }
 
+# Cleanup temp files on exit
+tmp_body=""
+cleanup() { [[ -n "$tmp_body" ]] && rm -f "$tmp_body"; }
+trap cleanup EXIT
+
 created=0
 skipped=0
 
 for title in "${titles[@]}"; do
-  if grep -Fxq "$title" <<<"$existing_titles"; then
+  if [[ -n "$existing_titles" ]] && grep -Fxq "$title" <<<"$existing_titles"; then
     echo "skip issue (exists): $title"
     skipped=$((skipped + 1))
     continue
@@ -78,8 +104,12 @@ for title in "${titles[@]}"; do
 
   labels_csv="$(printf '%s\n' "$section" | sed -n 's/^Labels: //p' | head -n 1)"
   milestone="$(printf '%s\n' "$section" | sed -n 's/^Milestone: //p' | head -n 1)"
-  body="$(printf '%s\n' "$section" | sed -n '/^Evidence:/,$p')"
 
+  # Capture body starting from Context: (preferred) or Evidence: (fallback)
+  body="$(printf '%s\n' "$section" | sed -n '/^Context:/,$p')"
+  if [[ -z "$body" ]]; then
+    body="$(printf '%s\n' "$section" | sed -n '/^Evidence:/,$p')"
+  fi
   if [[ -z "$body" ]]; then
     body="$section"
   fi
@@ -90,6 +120,16 @@ for title in "${titles[@]}"; do
     echo
     printf '%s\n' "$body"
   } >"$tmp_body"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "would create issue: $title"
+    echo "  labels: $labels_csv"
+    echo "  milestone: ${milestone:-<none>}"
+    rm -f "$tmp_body"
+    tmp_body=""
+    created=$((created + 1))
+    continue
+  fi
 
   args=(issue create --repo "$REPO" --title "$title" --body-file "$tmp_body")
 
@@ -106,6 +146,7 @@ for title in "${titles[@]}"; do
 
   gh "${args[@]}" >/dev/null
   rm -f "$tmp_body"
+  tmp_body=""
 
   existing_titles+=$'\n'"$title"
   echo "create issue: $title"

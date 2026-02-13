@@ -8,6 +8,10 @@ body:
     id: priority
     attributes:
       label: Priority
+      description: >
+        P0 = misleading docs that could cause incorrect usage.
+        P1 = missing or incomplete docs for core functionality.
+        P2 = polish and nice-to-have improvements.
       options:
         - P0-correctness/blocker
         - P1-important
@@ -48,7 +52,7 @@ body:
     id: proposal
     attributes:
       label: Proposed update
-      description: Exact docs/examples changes and audience.
+      description: Exact docs/examples changes, target audience, and affected files.
     validations:
       required: true
   - type: textarea
@@ -57,7 +61,8 @@ body:
       label: Definition of Done
       placeholder: |
         - [ ] Docs updated
-        - [ ] Example commands verified
-        - [ ] Feature requirements documented
+        - [ ] Example commands verified (`cargo run --example ...`)
+        - [ ] Feature requirements documented where applicable
+        - [ ] `cargo test --doc` passes
     validations:
       required: true

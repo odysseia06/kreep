@@ -176,17 +176,26 @@ Use this intake rule:
 5. Any issue without a crisp Definition of Done should be refined before backlog inclusion.
 6. Close stale exploratory issues that have no reproducer and no owner after one milestone.
 
+## Backlog Summary
+- Total issues: 20 (target range: 15–40)
+- P0 (correctness blockers): 2
+- P1 (important near-term): 15
+- P2 (roadmap/later): 3
+- Milestones: `v0.1-hardening` (8 issues), `v0.2-math-quality` (9 issues), `v0.3-crypto-roadmap` (3 issues)
+
+### Changes from initial triage (23 → 20 issues)
+- **Merged**: `fp.rs` and `ext.rs` no_std test/doctest gating into one issue (same root cause).
+- **Removed**: "Add deterministic RNG hooks for factorization/root APIs" (speculative; overlaps with property-test expansion).
+- **Removed**: "Roadmap: additional discrete-log algorithms (Pollard rho/Pohlig-Hellman)" (low evidence; premature without multi-limb backend).
+- **Re-typed**: "Provide checked-division APIs" changed from `bug` to `feature` (adding new API, not fixing broken behavior).
+- **Retitled**: Multiple issues for specificity and uniqueness.
+
 ## Automation Notes
 Artifacts added for automation:
 - `scripts/triage_create_labels.sh`
 - `scripts/triage_create_issues.sh`
 - `.github/ISSUE_TEMPLATE/*.yml`
 - `docs/triage/BACKLOG.md` as seed source for issue creation
-
-Execution run (authenticated `gh`) completed:
-- Labels synced: 25 labels present (idempotent re-run verified).
-- Milestones created: `v0.1-hardening`, `v0.2-math-quality`, `v0.3-crypto-roadmap`.
-- Issues created from backlog: 23 (`#1` through `#23` on `odysseia06/kreep`), with idempotent re-run showing `created=0, skipped=23`.
 
 If `gh` is unavailable or unauthenticated:
 1. Run `scripts/triage_create_labels.sh` later in an authenticated shell.

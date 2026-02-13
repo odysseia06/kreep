@@ -7,12 +7,21 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not include secrets, private keys, or sensitive tokens.
-        If this is a private vulnerability disclosure, use your responsible disclosure channel instead of a public issue.
+        **Disclosure note**: Do not include secrets, private keys, or sensitive tokens in this issue.
+        If this is an exploitable vulnerability in a deployed system, use private responsible
+        disclosure instead of a public issue. Contact the maintainers directly or use
+        GitHub's private security advisory feature (Security tab > "Report a vulnerability").
+
+        This template is for design-level safety concerns: timing leaks, misuse hazards,
+        invalid-input acceptance, and constant-time contract gaps.
   - type: dropdown
     id: priority
     attributes:
       label: Priority
+      description: >
+        P0 = exploitable in realistic threat model.
+        P1 = design gap or misuse hazard requiring documentation or mitigation.
+        P2 = hardening for defense-in-depth.
       options:
         - P0-correctness/blocker
         - P1-important
@@ -38,12 +47,12 @@ body:
     attributes:
       label: Security concern class
       options:
-        - Timing side-channel
-        - Data-dependent memory access
-        - Panic/misuse hazard
+        - Timing side-channel (secret-dependent branches/memory access)
+        - Data-dependent memory access pattern
+        - Panic/misuse hazard (unexpected input causes crash)
         - Invalid-curve/invalid-structure acceptance
-        - Serialization/deserialization trust issue
-        - RNG misuse
+        - Serialization/deserialization trust boundary violation
+        - RNG misuse or insufficient entropy
         - Other
     validations:
       required: true
@@ -51,9 +60,38 @@ body:
     id: threat_model
     attributes:
       label: Threat model
-      description: Secret inputs, attacker capabilities, and affected deployment context.
+      description: |
+        Specify: what is secret, what the attacker can observe/control, and what
+        deployment context is affected.
+      placeholder: |
+        Secret: field element used as private key
+        Attacker: can measure timing of `inverse()` calls
+        Context: server-side scalar multiplication
     validations:
       required: true
+  - type: textarea
+    id: ct_considerations
+    attributes:
+      label: Constant-time / side-channel considerations
+      description: |
+        Is the affected code path expected to be constant-time? Does it use the `subtle`
+        feature? Are there known variable-time operations in the call chain?
+      placeholder: |
+        `Fp::inverse()` at fp.rs:982 uses extended GCD with secret-dependent loop count.
+        `Fp::inverse_ct()` exists but is not used by default arithmetic operators.
+    validations:
+      required: false
+  - type: textarea
+    id: misuse
+    attributes:
+      label: Misuse hazards
+      description: |
+        How might a caller reasonably misuse this API in a security-sensitive context?
+      placeholder: |
+        A caller might assume that enabling the `subtle` feature makes all `Fp` operations
+        constant-time, but only `pow_ct` and `inverse_ct` are actually protected.
+    validations:
+      required: false
   - type: textarea
     id: evidence
     attributes:
@@ -74,6 +112,7 @@ body:
       placeholder: |
         - [ ] Risk reproduced and triaged
         - [ ] Mitigation implemented
+        - [ ] Variable-time APIs documented with warnings
         - [ ] Tests/docs updated with security guidance
     validations:
       required: true

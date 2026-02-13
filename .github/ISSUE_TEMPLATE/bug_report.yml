@@ -8,15 +8,36 @@ body:
     attributes:
       value: |
         Provide a minimal reproducer and concrete evidence (file+line, failing command, or test gap).
+        If this is a security-sensitive bug, consider using the Security template instead.
   - type: dropdown
     id: priority
     attributes:
       label: Priority
-      description: Choose one
+      description: >
+        P0 = correctness blocker or broken CI.
+        P1 = important near-term fix.
+        P2 = minor or cosmetic.
       options:
         - P0-correctness/blocker
         - P1-important
         - P2-later
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Affected module
+      description: Primary module where the bug manifests.
+      options:
+        - "Fp (prime field)"
+        - "Poly (polynomials)"
+        - "ExtField / TowerField"
+        - "GF / TowerGF (wrappers)"
+        - "NTT"
+        - "Algebra traits"
+        - "Serialization (serde)"
+        - "no_std / feature gating"
+        - "Other"
     validations:
       required: true
   - type: checkboxes
@@ -43,16 +64,21 @@ body:
   - type: textarea
     id: repro
     attributes:
-      label: Reproduction
-      description: Include exact command(s), inputs, and environment.
+      label: Minimal reproduction
+      description: |
+        Include exact command(s), inputs, Rust edition/version, and feature flags.
+        Prefer a self-contained code snippet or cargo command.
       placeholder: |
+        ```bash
         cargo test -q --no-default-features
-    validations:
-      required: true
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual behavior
+        ```
+
+        Or a Rust snippet:
+        ```rust
+        use kreep::Fp;
+        let x = Fp::<7>::new(0);
+        let _ = Fp::<7>::new(1) / x; // panics
+        ```
     validations:
       required: true
   - type: textarea
@@ -62,15 +88,30 @@ body:
     validations:
       required: true
   - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, panic output, or incorrect results.
+    validations:
+      required: true
+  - type: textarea
     id: evidence
     attributes:
       label: Evidence
-      description: File paths + line ranges, failing output snippets, or tests/docs gaps.
+      description: File paths + line ranges, failing output snippets, or test/doc gaps.
       placeholder: |
-        src/structures/fp.rs:965
-        src/structures/gf.rs:427
+        src/structures/fp.rs:965 — panics unconditionally on zero divisor
     validations:
       required: true
+  - type: textarea
+    id: test_to_add
+    attributes:
+      label: Regression test to add
+      description: Describe or sketch the test that should prevent recurrence.
+      placeholder: |
+        Add a test in `fp.rs` that calls `Fp::<7>::new(0).inverse()` and asserts `None`.
+    validations:
+      required: false
   - type: textarea
     id: dod
     attributes:
@@ -78,6 +119,6 @@ body:
       placeholder: |
         - [ ] Add failing regression test
         - [ ] Implement fix
-        - [ ] Validate with cargo test/clippy
+        - [ ] Validate with `cargo test` and `cargo clippy --all-targets --all-features`
     validations:
       required: true

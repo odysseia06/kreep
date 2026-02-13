@@ -8,6 +8,10 @@ body:
     id: priority
     attributes:
       label: Priority
+      description: >
+        P0 = severe regression blocking usage.
+        P1 = measurable improvement needed.
+        P2 = nice-to-have optimization.
       options:
         - P0-correctness/blocker
         - P1-important
@@ -32,40 +36,59 @@ body:
   - type: textarea
     id: workload
     attributes:
-      label: Workload
-      description: Data sizes, modulus/field, and hot path.
+      label: Workload description
+      description: Data sizes, modulus/field parameters, and hot path being targeted.
     validations:
       required: true
   - type: textarea
-    id: baseline
+    id: baseline_method
     attributes:
-      label: Baseline metrics
-      description: Include command, hardware, and measured values.
+      label: Baseline measurement method
+      description: |
+        How to reproduce current performance. Include exact command, hardware context,
+        and toolchain version.
       placeholder: |
-        cargo bench --bench benchmarks
+        ```bash
+        cargo bench --bench benchmarks -- "ntt_mul"
+        ```
+        Toolchain: stable 1.78, x86_64, AMD Ryzen 7
+    validations:
+      required: true
+  - type: textarea
+    id: baseline_results
+    attributes:
+      label: Baseline results
+      description: Measured values for the current implementation.
+      placeholder: |
+        ntt_mul (degree 1024): 45.2 us +/- 1.1 us
     validations:
       required: true
   - type: textarea
     id: target
     attributes:
-      label: Target metrics
-      description: Quantify expected improvement.
+      label: Target performance
+      description: Quantify the expected improvement with justification.
+      placeholder: |
+        Target: <30 us for degree 1024 (33% improvement)
+        Justification: eliminating redundant allocations in butterfly stage
     validations:
       required: true
   - type: textarea
     id: evidence
     attributes:
       label: Evidence
-      description: Relevant files/lines and benchmark outputs.
+      description: Relevant file paths/lines, profiling output, or flamegraph links.
     validations:
       required: true
   - type: textarea
     id: dod
     attributes:
       label: Definition of Done
+      description: Must include a benchmark requirement.
       placeholder: |
-        - [ ] Benchmark added/updated
-        - [ ] Improvement demonstrated
-        - [ ] No correctness regressions
+        - [ ] Criterion benchmark added or updated for the target path
+        - [ ] Improvement demonstrated vs. baseline
+        - [ ] No correctness regressions (`cargo test --all-features`)
+        - [ ] Benchmark results documented in PR
     validations:
       required: true

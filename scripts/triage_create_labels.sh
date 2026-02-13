@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=true
+  echo "=== DRY RUN MODE (no changes will be made) ==="
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh CLI not found. Install from https://cli.github.com/"
   exit 1
 fi
 
-if ! gh auth status -h github.com >/dev/null 2>&1; then
+if [[ "$DRY_RUN" == false ]] && ! gh auth status -h github.com >/dev/null 2>&1; then
   echo "gh is not authenticated for github.com. Run: gh auth login"
   exit 1
 fi
@@ -21,15 +27,23 @@ if [[ -z "$REPO" ]]; then
   exit 1
 fi
 
-existing_labels="$(gh label list --repo "$REPO" --limit 1000 --json name --jq '.[].name')"
+existing_labels=""
+if [[ "$DRY_RUN" == false ]]; then
+  existing_labels="$(gh label list --repo "$REPO" --limit 1000 --json name --jq '.[].name')"
+fi
 
 create_if_missing() {
   local name="$1"
   local color="$2"
   local desc="$3"
 
-  if grep -Fxq "$name" <<<"$existing_labels"; then
+  if [[ -n "$existing_labels" ]] && grep -Fxq "$name" <<<"$existing_labels"; then
     echo "skip label: $name"
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "would create label: $name ($color) — $desc"
     return 0
   fi
 
