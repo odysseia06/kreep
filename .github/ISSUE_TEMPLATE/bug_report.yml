@@ -1,0 +1,83 @@
+name: Bug Report
+description: Report incorrect behavior, failing tests, or API breakage
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Provide a minimal reproducer and concrete evidence (file+line, failing command, or test gap).
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Choose one
+      options:
+        - P0-correctness/blocker
+        - P1-important
+        - P2-later
+    validations:
+      required: true
+  - type: checkboxes
+    id: areas
+    attributes:
+      label: Area labels (pick 1-3)
+      options:
+        - label: area:traits-algebra
+        - label: area:field-fp
+        - label: area:ext-fields
+        - label: area:polynomials
+        - label: area:ntt-fft
+        - label: area:factorization
+        - label: area:discrete-log
+        - label: area:serialization
+        - label: area:randomness
+        - label: area:constant-time
+        - label: area:no-std
+        - label: area:benchmarks
+        - label: area:docs-examples
+        - label: area:infra-ci
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Include exact command(s), inputs, and environment.
+      placeholder: |
+        cargo test -q --no-default-features
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: File paths + line ranges, failing output snippets, or tests/docs gaps.
+      placeholder: |
+        src/structures/fp.rs:965
+        src/structures/gf.rs:427
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      placeholder: |
+        - [ ] Add failing regression test
+        - [ ] Implement fix
+        - [ ] Validate with cargo test/clippy
+    validations:
+      required: true

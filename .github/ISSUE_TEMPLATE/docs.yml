@@ -1,0 +1,63 @@
+name: Documentation
+description: Improve docs, examples, or onboarding clarity
+title: "[docs] "
+labels:
+  - docs
+body:
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0-correctness/blocker
+        - P1-important
+        - P2-later
+    validations:
+      required: true
+  - type: checkboxes
+    id: areas
+    attributes:
+      label: Area labels (pick 1-3)
+      options:
+        - label: area:docs-examples
+        - label: area:no-std
+        - label: area:serialization
+        - label: area:constant-time
+        - label: area:infra-ci
+        - label: area:field-fp
+        - label: area:ext-fields
+        - label: area:polynomials
+        - label: area:ntt-fft
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: Documentation gap
+      description: What is currently confusing, missing, or incorrect?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: File paths/line ranges, broken examples, or feature mismatch notes.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed update
+      description: Exact docs/examples changes and audience.
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      placeholder: |
+        - [ ] Docs updated
+        - [ ] Example commands verified
+        - [ ] Feature requirements documented
+    validations:
+      required: true

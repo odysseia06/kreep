@@ -1,0 +1,71 @@
+name: Performance
+description: Track performance regressions and optimization work
+title: "[perf] "
+labels:
+  - perf
+body:
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0-correctness/blocker
+        - P1-important
+        - P2-later
+    validations:
+      required: true
+  - type: checkboxes
+    id: areas
+    attributes:
+      label: Area labels (pick 1-3)
+      options:
+        - label: area:field-fp
+        - label: area:ext-fields
+        - label: area:polynomials
+        - label: area:ntt-fft
+        - label: area:factorization
+        - label: area:discrete-log
+        - label: area:benchmarks
+        - label: area:no-std
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload
+      description: Data sizes, modulus/field, and hot path.
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline metrics
+      description: Include command, hardware, and measured values.
+      placeholder: |
+        cargo bench --bench benchmarks
+    validations:
+      required: true
+  - type: textarea
+    id: target
+    attributes:
+      label: Target metrics
+      description: Quantify expected improvement.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Relevant files/lines and benchmark outputs.
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      placeholder: |
+        - [ ] Benchmark added/updated
+        - [ ] Improvement demonstrated
+        - [ ] No correctness regressions
+    validations:
+      required: true

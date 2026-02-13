@@ -1,0 +1,76 @@
+name: Feature Request
+description: Propose a new capability or API improvement
+title: "[feature] "
+labels:
+  - feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For roadmap items, clearly separate planned scope from currently implemented behavior.
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0-correctness/blocker
+        - P1-important
+        - P2-later
+    validations:
+      required: true
+  - type: checkboxes
+    id: areas
+    attributes:
+      label: Area labels (pick 1-3)
+      options:
+        - label: area:traits-algebra
+        - label: area:field-fp
+        - label: area:ext-fields
+        - label: area:polynomials
+        - label: area:ntt-fft
+        - label: area:factorization
+        - label: area:discrete-log
+        - label: area:serialization
+        - label: area:randomness
+        - label: area:constant-time
+        - label: area:no-std
+        - label: area:benchmarks
+        - label: area:docs-examples
+        - label: area:infra-ci
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What concrete user/developer problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: API sketch, modules touched, and migration notes.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence / anchors
+      description: Existing file paths/lines, missing tests/docs, or prior art links.
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      placeholder: |
+        - [ ] API finalized
+        - [ ] Tests and docs added
+        - [ ] Benchmarks (if perf-sensitive)
+    validations:
+      required: true
